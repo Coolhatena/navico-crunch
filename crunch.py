@@ -15,7 +15,10 @@ while not cam.isOpened() and not is_frame_ok:
 	sleep(0.05)
 
 filter_pink = (np.array([0, 0, 0]), np.array([25, 255, 255]))
-filter_data = filter_pink
+filter_gold = (np.array([18, 0, 173]), np.array([49, 168, 248]))
+filter_white = (np.array([0, 0, 162]), np.array([180, 28, 255]))
+
+filter_selected = filter_pink # Default
 
 area = ((250,190), (390,290))
 (x1, y1), (x2, y2) = area
@@ -24,6 +27,14 @@ center_line_pts = ((center_x, y1), (center_x, y2))
 
 q_unicode = ord('q')
 b_unicode = ord('b')
+
+one_unicode = ord('1')
+two_unicode = ord('2')
+three_unicode = ord('3')
+
+print(f"one: {one_unicode}")
+print(f"two: {two_unicode}")
+print(f"three: {three_unicode}")
 
 saved_reference_center = None
 while True:
@@ -34,7 +45,7 @@ while True:
 		continue
 
 	subframe = frame[y1:y2, x1:x2]
-	LOW, UPP = filter_data
+	LOW, UPP = filter_selected
 	hsv = cv2.cvtColor(subframe, cv2.COLOR_BGR2HSV)
 	msk = cv2.inRange(hsv, LOW, UPP)
 
@@ -87,7 +98,7 @@ while True:
 
 
 	cv2.imshow('Frame', frame)
-	# cv2.imshow('Filtered', msk)
+	cv2.imshow('Filtered', msk)
 	h, w = frame.shape[:2]
 	# 240, 320
 	# print(h, w)
@@ -99,6 +110,22 @@ while True:
 
 	if key == b_unicode: # If 'b' is pressed, save center 
 		saved_reference_center = pt_center
+
+	# Change filters
+	if key == one_unicode:
+		filter_selected = filter_pink
+		saved_reference_center = None
+
+
+	if key == two_unicode:
+		filter_selected = filter_gold
+		saved_reference_center = None
+
+	if key == three_unicode:
+		filter_selected = filter_white
+		saved_reference_center = None
+
+	print(filter_selected)
 
 cam.release()
 cv2.destroyAllWindows()
