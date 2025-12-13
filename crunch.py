@@ -3,27 +3,46 @@ import cv2
 from time import sleep
 import numpy as np
 import helpers
+import socket
+import threading
+import json
+import os
 
-camera_index = 0
-cam = cv2.VideoCapture(camera_index)
+def load_filters_config():
+    """Load HSV filters from config.json -> {filters:{name:{low:[H,S,V], high:[H,S,V]}}}.
+    Returns numpy array pairs for pink, gold, white. Falls back to defaults.
+    """
+    defaults = {
+        "pink":  {"low": [0, 0, 0],   "high": [25, 255, 255]},
+        "gold":  {"low": [18, 0, 173], "high": [49, 168, 248]},
+        "white": {"low": [0, 0, 162], "high": [180, 28, 255]},
+    }
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
 
-is_frame_ok = False
-while not cam.isOpened() and not is_frame_ok:
-	cam = cv2.VideoCapture(camera_index)
-	is_frame_ok, _ = cam.read()
-	print("Waiting for camera...")
-	sleep(0.05)
+    def to_pair(cfg, name):
+        base = defaults[name]
+        low = (cfg.get(name, {}) or {}).get("low", base["low"]) if isinstance(cfg, dict) else base["low"]
+        high = (cfg.get(name, {}) or {}).get("high", base["high"]) if isinstance(cfg, dict) else base["high"]
+        return (np.array(low), np.array(high))
 
-filter_pink = (np.array([0, 0, 0]), np.array([25, 255, 255]))
-filter_gold = (np.array([18, 0, 173]), np.array([49, 168, 248]))
-filter_white = (np.array([0, 0, 162]), np.array([180, 28, 255]))
+    filters_cfg = None
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and "filters" in data:
+            filters_cfg = data["filters"]
+    except Exception as e:
+        print(f"[CONFIG:FILTERS] Using defaults. Reason: {e}")
 
-filter_selected = filter_pink # Default
+    filter_pink = to_pair(filters_cfg, "pink")
+    filter_gold = to_pair(filters_cfg, "gold")
+    filter_white = to_pair(filters_cfg, "white")
+    return filter_pink, filter_gold, filter_white
 
-area = ((250,190), (390,290))
-(x1, y1), (x2, y2) = area
-center_x = x1 + ((x2 - x1) // 2)
-center_line_pts = ((center_x, y1), (center_x, y2))
+# Load filters from config.json (with defaults)
+filter_pink, filter_gold, filter_white = load_filters_config()
+
+filter_selected = filter_pink  # Default
 
 q_unicode = ord('q')
 b_unicode = ord('b')
@@ -37,6 +56,133 @@ print(f"two: {two_unicode}")
 print(f"three: {three_unicode}")
 
 saved_reference_center = None
+
+def load_config():
+    """Load IP/PORT from config.json placed next to this script.
+    Falls back to defaults if file is missing or invalid.
+    """
+    defaults = {"ip": "192.168.10.25", "port": 2001}
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Support either top-level or nested under "server"
+        if isinstance(data, dict) and "server" in data and isinstance(data["server"], dict):
+            data = data["server"]
+        ip = str(data.get("ip", defaults["ip"]))
+        port = int(data.get("port", defaults["port"]))
+        return ip, port
+    except Exception as e:
+        print(f"[CONFIG] Using defaults. Reason: {e}")
+        return defaults["ip"], defaults["port"]
+
+# Socket server config
+# Same IP, different port. Loaded from config.json
+IP, PORT = load_config()
+
+# Shared state for detection results
+values_lock = threading.Lock()
+latest_values = {"x_diff": 0, "y_diff": 0}
+
+
+def diffs_server_thread():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server.bind((IP, PORT))
+    except OSError as e:
+        print(f"[SERVER BIND ERROR] {e}")
+        return
+    server.listen()
+    print(f"[LISTENING] Diff server listening on {IP}:{PORT}")
+
+    while True:
+        try:
+            conn, addr = server.accept()
+        except OSError as e:
+            print(f"[ACCEPT ERROR] {e}")
+            sleep(0.1)
+            continue
+
+        with values_lock:
+            x = latest_values["x_diff"]
+            y = latest_values["y_diff"]
+
+        payload = f"{x},{y}\n".encode("utf-8")
+        try:
+            conn.sendall(payload)
+            print(f"[SENT] to {addr}: {x},{y}")
+        except Exception as e:
+            print(f"[SEND ERROR] {e}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+# Start server in background
+threading.Thread(target=diffs_server_thread, daemon=True).start()
+
+def load_camera_area_config():
+    """Load camera index and detection area from config.json.
+    Supports top-level keys: camera_index, area (as [[x1,y1],[x2,y2]] or {x1,y1,x2,y2})
+    Also supports nested: {"camera": {"index": int}, "detection": {"area": ...}}
+    """
+    defaults_index = 0
+    defaults_area = ((250, 190), (390, 290))
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    cam_idx = defaults_index
+    area = defaults_area
+    try:
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # camera index
+        if isinstance(data, dict):
+            if "camera_index" in data:
+                cam_idx = int(data.get("camera_index", defaults_index))
+            elif "camera" in data and isinstance(data["camera"], dict):
+                cam_idx = int(data["camera"].get("index", defaults_index))
+
+            # area
+            raw_area = None
+            if "area" in data:
+                raw_area = data["area"]
+            elif "detection" in data and isinstance(data["detection"], dict):
+                raw_area = data["detection"].get("area")
+
+            if isinstance(raw_area, list) and len(raw_area) == 2:
+                (ax1, ay1), (ax2, ay2) = raw_area
+                area = ((int(ax1), int(ay1)), (int(ax2), int(ay2)))
+            elif isinstance(raw_area, dict):
+                ax1 = int(raw_area.get("x1", defaults_area[0][0]))
+                ay1 = int(raw_area.get("y1", defaults_area[0][1]))
+                ax2 = int(raw_area.get("x2", defaults_area[1][0]))
+                ay2 = int(raw_area.get("y2", defaults_area[1][1]))
+                area = ((ax1, ay1), (ax2, ay2))
+    except Exception as e:
+        print(f"[CONFIG:CAM/AREA] Using defaults. Reason: {e}")
+
+    # normalize ordering
+    (ax1, ay1), (ax2, ay2) = area
+    x1n, x2n = (ax1, ax2) if ax1 <= ax2 else (ax2, ax1)
+    yn1, yn2 = (ay1, ay2) if ay1 <= ay2 else (ay2, ay1)
+    return cam_idx, ((x1n, yn1), (x2n, yn2))
+
+# Load camera index and area
+camera_index, area = load_camera_area_config()
+(x1, y1), (x2, y2) = area
+center_x = x1 + ((x2 - x1) // 2)
+center_line_pts = ((center_x, y1), (center_x, y2))
+
+# Initialize camera using configured index
+cam = cv2.VideoCapture(camera_index)
+is_frame_ok = False
+while not cam.isOpened() and not is_frame_ok:
+    cam = cv2.VideoCapture(camera_index)
+    is_frame_ok, _ = cam.read()
+    print("Waiting for camera...")
+    sleep(0.05)
 while True:
 	is_frame_ok, frame = cam.read()
 	frame = cv2.rotate(frame, cv2.ROTATE_180)
@@ -92,6 +238,10 @@ while True:
 			cv2.circle(frame, saved_reference_center, 5, (255, 0, 0), -1)
 
 			x_diff, y_diff = (abs(saved_reference_center[0] - pt_center[0]), abs(saved_reference_center[1] - pt_center[1]))
+			# Update shared latest diffs for the socket server
+			with values_lock:
+				latest_values["x_diff"] = int(x_diff)
+				latest_values["y_diff"] = int(y_diff)
 
 			text_coords = (x1 - 60, y2 - 120) 
 			cv2.putText(frame, f"Correccion: {x_diff}, {y_diff}", text_coords, cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1)
