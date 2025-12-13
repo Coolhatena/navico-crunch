@@ -4,7 +4,7 @@ from time import sleep
 import numpy as np
 import helpers
 
-camera_index = 2
+camera_index = 0
 cam = cv2.VideoCapture(camera_index)
 
 is_frame_ok = False
