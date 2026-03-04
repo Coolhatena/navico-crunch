@@ -1,0 +1,24 @@
+{
+  "ip": "192.168.10.5",
+  "port_recv": 2000,
+  "port_send": 2001,
+  "filters": {
+    "pink": {
+      "low": [0, 3, 177],
+      "high": [98, 66, 255]
+    },
+    "gold": {
+      "low": [0, 0, 0],
+      "high": [23, 255, 255]
+    },
+    "white": {
+      "low": [0, 0, 253],
+      "high": [180, 255, 255]
+    }
+  },
+  "camera_index": 0,
+  "rotate": false,
+  "rotate90": true,
+  "area": [[90, 290] ,[190, 390]],
+  "edge": "left"
+}
