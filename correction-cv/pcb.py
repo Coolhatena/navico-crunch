@@ -7,6 +7,7 @@ import socket
 import threading
 import json
 import os
+import sys
 import re
 import tkinter as tk
 from datetime import datetime
@@ -66,6 +67,10 @@ def extract_cmd(data):
         return "center"
     return ""
 
+def get_base_path():
+    if getattr(sys, "frozen", False):  # ejecutándose como .exe
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def load_filters_config():
     """Load HSV filters from config.json -> {filters:{name:{low:[H,S,V], high:[H,S,V]}}}.
@@ -76,7 +81,8 @@ def load_filters_config():
         "gold": {"low": [18, 0, 173], "high": [49, 168, 248]},
         "white": {"low": [0, 0, 162], "high": [180, 28, 255]},
     }
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    base_path = get_base_path()
+    cfg_path = os.path.join(base_path, "config.json")
 
     def to_pair(cfg, name):
         base = defaults[name]
@@ -120,7 +126,8 @@ def load_config():
     Falls back to defaults if file is missing or invalid.
     """
     defaults = {"ip": "192.168.10.25", "port_recv": 2000, "port_send": 2001}
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    base_path = get_base_path()
+    cfg_path = os.path.join(base_path, "config.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -424,7 +431,8 @@ def load_camera_area_config():
     defaults_area = ((250, 190), (390, 290))
     defaults_edge = "left"
 
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    base_path = get_base_path()
+    cfg_path = os.path.join(base_path, "config.json")
     cam_idx = defaults_index
     area = defaults_area
     is_rotate = False
