@@ -7,6 +7,7 @@ import socket
 import threading
 import json
 import os
+import sys
 import re
 import tkinter as tk
 from datetime import datetime
@@ -76,6 +77,10 @@ def extract_cmd(data):
         return "relative_reference"
     return ""
 
+def get_base_path():
+    if getattr(sys, "frozen", False):  # ejecutándose como .exe
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
 
 def load_filters_config():
     """Load HSV filters from config.json -> {filters:{name:{low:[H,S,V], high:[H,S,V]}}}.
@@ -87,7 +92,8 @@ def load_filters_config():
         "white": {"low": [0, 0, 162], "high": [180, 28, 255]},
         "dispenser": {"low": [0, 0, 97], "high": [180, 22, 142]},
     }
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    base_path = get_base_path()
+    cfg_path = os.path.join(base_path, "config.json")
 
     def to_pair(cfg, name):
         base = defaults[name]
@@ -550,7 +556,8 @@ def load_camera_area_config():
     defaults_dispenser_area = ((190, 290), (290, 490))
     defaults_edge = "left"
 
-    cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
+    base_path = get_base_path()
+    cfg_path = os.path.join(base_path, "config.json")
     cam_idx = defaults_index
     area = defaults_area
     area_dispenser = defaults_dispenser_area
