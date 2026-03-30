@@ -14,6 +14,8 @@ from datetime import datetime
 TCP_DEBUG_RECV = True
 TCP_RECV_POLL_TIMEOUT_S = 0.5
 PIXEL_TO_DELTA_SCALE = 0.1
+TCP_X_FACTOR = -1
+TCP_Y_FACTOR = -1
 VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i")
 
 
@@ -135,7 +137,14 @@ def load_config():
     """Load IP/PORTs from config.json placed next to this script.
     Falls back to defaults if file is missing or invalid.
     """
-    defaults = {"ip": "192.168.10.25", "port_recv": 2000, "port_send": 2001}
+    defaults = {
+        "ip": "192.168.10.25",
+        "port_recv": 2000,
+        "port_send": 2001,
+        "pixel_mm_scale": 0.1,
+        "tcp_x_factor": -1,
+        "tcp_y_factor": -1,
+    }
     cfg_path = os.path.join(os.path.dirname(__file__), "config.json")
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
@@ -145,13 +154,23 @@ def load_config():
         ip = str(data.get("ip", defaults["ip"]))
         port_recv = int(data.get("port_recv", data.get("port", defaults["port_recv"])))
         port_send = int(data.get("port_send", data.get("port", defaults["port_send"])))
-        return ip, port_recv, port_send
+        pixel_mm_scale = float(data.get("pixel_mm_scale", defaults["pixel_mm_scale"]))
+        tcp_x_factor = float(data.get("tcp_x_factor", defaults["tcp_x_factor"]))
+        tcp_y_factor = float(data.get("tcp_y_factor", defaults["tcp_y_factor"]))
+        return ip, port_recv, port_send, pixel_mm_scale, tcp_x_factor, tcp_y_factor
     except Exception as e:
         print(f"[CONFIG] Using defaults. Reason: {e}")
-        return defaults["ip"], defaults["port_recv"], defaults["port_send"]
+        return (
+            defaults["ip"],
+            defaults["port_recv"],
+            defaults["port_send"],
+            defaults["pixel_mm_scale"],
+            defaults["tcp_x_factor"],
+            defaults["tcp_y_factor"],
+        )
 
 
-IP, PORT_RECV, PORT_SEND = load_config()
+IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
 
 # Shared state for detection results + remote control
 state_lock = threading.Lock()
@@ -207,6 +226,13 @@ def compute_scaled_delta(reference_point, current_point):
     x_diff = (reference_point[0] - current_point[0]) * PIXEL_TO_DELTA_SCALE
     y_diff = (reference_point[1] - current_point[1]) * PIXEL_TO_DELTA_SCALE
     return round(x_diff, 2), round(y_diff, 2)
+
+
+def format_tcp_response(x_value, y_value):
+    response_x = round(x_value * TCP_X_FACTOR, 2)
+    response_y = round(y_value * TCP_Y_FACTOR, 2)
+    response_text = f"{response_x},{response_y}"
+    return response_text.encode("utf-8") + b"\n", response_text
 
 
 def detect_contour_center(frame, area_coords, filter_pair, edge_mode):
@@ -436,8 +462,8 @@ def recv_server_thread():
                         item_id = latest_state["item_id"] or ""
                         now = datetime.now()
                         payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-                        response = f"{-x},{-y}\n".encode("utf-8")
-                        print(f"[TCP Z RESPONSE] {-x},{-y}")
+                        response, response_text = format_tcp_response(x, y)
+                        print(f"[TCP Z RESPONSE] {response_text}")
                         # response = payload
 
                     elif cmd == "relative_delta":
@@ -447,12 +473,12 @@ def recv_server_thread():
                         item_id = latest_state["item_id"] or ""
                         now = datetime.now()
                         payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-                        response = f"{-x},{-y}\n".encode("utf-8")
+                        response, _ = format_tcp_response(x, y)
 
                     else:
                         x = latest_state["relative_x_diff"]
                         y = latest_state["relative_y_diff"]
-                        response = f"{-x},{-y}\n".encode("utf-8")
+                        response, _ = format_tcp_response(x, y)
 
                     latest_state["last_response"] = response
 
@@ -754,7 +780,8 @@ while True:
         with state_lock:
             relative_x = latest_state["relative_x_diff"]
             relative_y = latest_state["relative_y_diff"]
-        print(f"[RELATIVE DELTA] {-relative_x},{-relative_y}")
+        _, response_text = format_tcp_response(relative_x, relative_y)
+        print(f"[RELATIVE DELTA] {response_text}")
 
     if key == one_unicode:
         filter_selected = filter_pink

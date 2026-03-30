@@ -2,6 +2,9 @@
   "ip": "192.168.10.5",
   "port_recv": 2000,
   "port_send": 2001,
+  "pixel_mm_scale": 0.1,
+  "tcp_x_factor": 1,
+  "tcp_y_factor": 1,
   "filters": {
     "pink": {
       "low": [0, 35, 70],
