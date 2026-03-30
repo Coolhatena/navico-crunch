@@ -648,9 +648,6 @@ def load_camera_area_config():
 
     except Exception as e:
         print(f"[CONFIG:CAM/AREA] Using defaults. Reason: {e}")
-    area = normalize_area(area, defaults_area)
-    area_dispenser = normalize_area(area_dispenser, defaults_dispenser_area)
-    glue_roi = normalize_area(glue_roi, defaults_glue_roi)
 
     return cam_idx, area, area_dispenser, glue_roi, is_rotate, is_rotate90, edge
 
@@ -658,6 +655,11 @@ def load_camera_area_config():
 camera_index, area, area_dispenser, glue_roi, is_rotate, is_rotate90, edge = load_camera_area_config()
 (x1, y1), (x2, y2) = area
 (dx1, dy1), (dx2, dy2) = area_dispenser
+
+print(f"[CONFIG] area={area}")
+print(f"[CONFIG] area_dispenser={area_dispenser}")
+print(f"[CONFIG] roi={glue_roi}")
+print(f"[CONFIG] rotate={is_rotate} rotate90={is_rotate90}")
 
 cam = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
 is_frame_ok = False
@@ -667,6 +669,8 @@ while not cam.isOpened() and not is_frame_ok:
     is_frame_ok, _ = cam.read()
     print("Waiting for camera...")
     sleep(0.05)
+
+logged_frame_shape = False
 
 while True:
     process_pending_id_requests()
@@ -680,6 +684,10 @@ while True:
 
     if is_rotate90:
         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
+    if not logged_frame_shape:
+        print(f"[FRAME] shape_after_rotation={frame.shape}")
+        logged_frame_shape = True
 
     glue_frame = run_glue_pipeline(frame, glue_roi, filter_pink)
     main_detection = detect_contour_center(frame, area, filter_selected, edge)
