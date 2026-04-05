@@ -29,12 +29,13 @@
   "area": [[25, 290] ,[150, 450]],
   "area_dispenser": [[100, 360] ,[300, 440]],
   "edge": "left",
+  "auth_request_output_dir": "authlog",
   "crunch_coms": {
     "enabled": true,
     "ip": "192.168.10.5",
     "port": 2011,
     "size": 2048,
-    "real_count": 360,
+    "real_count": 100,
     "real_stride": 4,
     "real_start": 0,
     "output_dir": "correction_data"

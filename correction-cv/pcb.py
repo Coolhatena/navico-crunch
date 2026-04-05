@@ -56,7 +56,7 @@ def extract_cmd(data):
 		"z": "delta",
 		"x": "relative_delta",
 		"o": "reset_operator",
-		"i": "reset_item",
+		"i": "request_engineer_auth",
 	}
 
 	tokens = re.split(r"[^a-z0-9_]+", text)
@@ -179,6 +179,26 @@ def load_config():
 
 
 IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
+
+
+def load_auth_request_config():
+	"""Load authorization request storage config from config.json next to script/.exe."""
+	defaults = {
+		"output_dir": "data/auth",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		output_dir = str(data.get("auth_request_output_dir", defaults["output_dir"])) if isinstance(data, dict) else defaults["output_dir"]
+		return output_dir
+	except Exception as e:
+		print(f"[CONFIG:AUTH] Using defaults. Reason: {e}")
+		return defaults["output_dir"]
+
+
+AUTH_REQUEST_OUTPUT_DIR = load_auth_request_config()
 
 
 def load_crunch_coms_config():
@@ -324,6 +344,16 @@ def save_crunch_payload(operator_id, item_id, now, values):
 	return payload_text.encode("utf-8"), file_path
 
 
+def save_auth_request_result(result_text, now):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	output_dir = os.path.join(get_base_path(), AUTH_REQUEST_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+	file_path = os.path.join(output_dir, f"{timestamp}.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(result_text)
+	return file_path
+
+
 def compute_scaled_delta(reference_point, current_point):
 	x_diff = (reference_point[0] - current_point[0]) * PIXEL_TO_DELTA_SCALE
 	y_diff = (reference_point[1] - current_point[1]) * PIXEL_TO_DELTA_SCALE
@@ -391,8 +421,8 @@ def detect_contour_center(frame, area_coords, filter_pair, edge_mode):
 	return result
 
 
-def _prompt_text_with_tk(title, prompt):
-	"""Ask for a non-empty value in a Tkinter window and submit on Enter."""
+def _prompt_text_with_tk(title, prompt, require_non_empty=True):
+	"""Prompt for text using Tkinter, optionally allowing empty/cancelled results."""
 	while True:
 		try:
 			root = tk.Tk()
@@ -401,9 +431,9 @@ def _prompt_text_with_tk(title, prompt):
 			root.attributes("-topmost", True)
 		except tk.TclError:
 			value = input(f"{prompt} ").strip()
-			if value:
-				return value
-			continue
+			if require_non_empty and not value:
+				continue
+			return value
 
 		value_ref = {"value": None}
 
@@ -422,21 +452,29 @@ def _prompt_text_with_tk(title, prompt):
 
 		def submit(event=None):
 			value = entry.get().strip()
-			if not value:
+			if require_non_empty and not value:
 				error_label.config(text="El valor no puede estar vacio.")
 				return
 			value_ref["value"] = value
+			root.destroy()
+
+		def on_close():
+			value_ref["value"] = ""
 			root.destroy()
 
 		submit_btn = tk.Button(frame, text="Submit", command=submit)
 		submit_btn.pack(pady=(8, 0))
 
 		root.bind("<Return>", submit)
-		root.protocol("WM_DELETE_WINDOW", lambda: None)
+		root.protocol("WM_DELETE_WINDOW", lambda: None if require_non_empty else on_close())
 		root.mainloop()
 
-		if value_ref["value"]:
+		if value_ref["value"] is not None:
 			return value_ref["value"]
+
+
+def request_engineer_authorization():
+	return _prompt_text_with_tk("Autorizacion", "Escanee el id de ingeniero", require_non_empty=False)
 
 
 def request_operator_and_item():
@@ -527,6 +565,21 @@ def recv_server_thread():
 
 				print("comando:")
 				print(cmd)
+
+				if cmd == "request_engineer_auth":
+					auth_result = request_engineer_authorization()
+					auth_saved_path = save_auth_request_result(auth_result, datetime.now())
+					response = b"oki\n" if auth_result else b"nooki\n"
+					with state_lock:
+						latest_state["last_response"] = response
+					try:
+						conn.sendall(response)
+						print(f"[SENT] to {addr}: {response.decode('utf-8', errors='ignore').strip()}")
+						print(f"[AUTH DATA] saved {auth_saved_path}")
+					except Exception as e:
+						print(f"[SEND ERROR] {e}")
+						break
+					continue
 
 				with state_lock:
 					if cmd in ("pink", "gold", "white"):
