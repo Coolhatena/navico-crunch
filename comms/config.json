@@ -5,5 +5,14 @@
   "timeout": 3.0,
   "start_offset": 0,
   "array_count": 10,
-  "declared_n": null
+  "declared_n": null,
+  "crunch_coms": {
+    "ip": "192.168.10.34",
+    "port": 2000,
+    "size": 2048,
+    "real_count": 360,
+    "real_stride": 4,
+    "real_start": 0,
+    "output_dir": "datos"
+  }
 }
