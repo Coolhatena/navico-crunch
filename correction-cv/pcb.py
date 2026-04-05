@@ -282,7 +282,9 @@ latest_state = {
 	"pending_reset_operator": False,
 	"pending_reset_item": False,
 	"reset_operator_in_progress": False,
+	"reset_operator_result": None,
 }
+reset_operator_done_event = threading.Event()
 
 
 def _sanitize_filename_token(value):
@@ -499,9 +501,16 @@ def get_key_command(key):
 	return key_map.get(key)
 
 
+def request_required_text(title, prompt):
+	while True:
+		value = _prompt_text_with_tk(title, prompt, require_non_empty=False)
+		if value:
+			return value
+
+
 def request_operator_and_item():
-	operator_id = _prompt_text_with_tk("ID Operador", "Ingresa ID de operador:")
-	item_id = _prompt_text_with_tk("ID Item", "Ingresa ID de item:")
+	operator_id = request_required_text("ID Operador", "Escanee el id de operador")
+	item_id = request_required_text("ID Item", "Escanee el qr de lote")
 	with state_lock:
 		latest_state["operator_id"] = operator_id
 		latest_state["item_id"] = item_id
@@ -509,7 +518,7 @@ def request_operator_and_item():
 
 
 def request_item_only():
-	item_id = _prompt_text_with_tk("ID Item", "Ingresa ID de item:")
+	item_id = request_required_text("ID Item", "Escanee el qr de lote")
 	with state_lock:
 		latest_state["item_id"] = item_id
 	print(f"[IDS] item={item_id}")
@@ -530,11 +539,17 @@ def process_pending_id_requests():
 			latest_state["pending_reset_item"] = False
 
 	if do_reset_operator:
+		reset_success = False
 		try:
 			request_operator_and_item()
+			reset_success = True
+		except Exception as e:
+			print(f"[RESET OPERATOR ERROR] {e}")
 		finally:
 			with state_lock:
 				latest_state["reset_operator_in_progress"] = False
+				latest_state["reset_operator_result"] = reset_success
+			reset_operator_done_event.set()
 	elif do_reset_item:
 		request_item_only()
 
@@ -547,7 +562,7 @@ def handle_command(cmd, source="tcp"):
 	if cmd == "request_engineer_auth":
 		auth_result = request_engineer_authorization()
 		auth_saved_path = save_auth_request_result(auth_result, datetime.now())
-		response = b"oki\n" if auth_result else b"nooki\n"
+		response = b"iii" if auth_result else b"III"
 		log_text = response.decode("utf-8", errors="ignore").strip()
 		with state_lock:
 			latest_state["last_response"] = response
@@ -576,16 +591,20 @@ def handle_command(cmd, source="tcp"):
 
 		elif cmd == "reset_operator":
 			if latest_state["pending_reset_operator"] or latest_state["reset_operator_in_progress"]:
-				response = b"OK\n"
-				log_text = "OK (reset_operator already pending)"
+				should_wait_reset = source == "tcp"
+				response = b"o\n"
+				log_text = "o (reset_operator already pending)"
 			else:
 				latest_state["operator_id"] = None
 				latest_state["item_id"] = None
 				latest_state["pending_reset_operator"] = True
 				latest_state["pending_reset_item"] = False
 				latest_state["reset_operator_in_progress"] = True
-				response = b"OK\n"
-				log_text = "OK"
+				latest_state["reset_operator_result"] = None
+				reset_operator_done_event.clear()
+				should_wait_reset = source == "tcp"
+				response = b"o\n"
+				log_text = "o"
 
 		elif cmd == "reset_item":
 			latest_state["item_id"] = None
@@ -617,6 +636,14 @@ def handle_command(cmd, source="tcp"):
 			response, log_text = format_tcp_response(x, y)
 
 		latest_state["last_response"] = response
+	if cmd == "reset_operator" and source == "tcp":
+		reset_operator_done_event.wait()
+		with state_lock:
+			reset_success = bool(latest_state["reset_operator_result"])
+		response = b"ooo" if reset_success else b"OOO"
+		log_text = response.decode("utf-8", errors="ignore").strip()
+		with state_lock:
+			latest_state["last_response"] = response
 
 	return response, log_text, delta_saved_path, auth_saved_path
 
