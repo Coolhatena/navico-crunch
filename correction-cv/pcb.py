@@ -134,6 +134,11 @@ i_unicode = ord("i")
 n_unicode = ord("n")
 m_unicode = ord("m")
 x_unicode = ord("x")
+z_unicode = ord("z")
+g_unicode = ord("g")
+w_unicode = ord("w")
+d_unicode = ord("d")
+r_unicode = ord("r")
 
 saved_reference_center = None
 saved_dispenser_reference_center = None
@@ -477,6 +482,22 @@ def request_engineer_authorization():
 	return _prompt_text_with_tk("Autorizacion", "Escanee el id de ingeniero", require_non_empty=False)
 
 
+def get_key_command(key):
+	key_map = {
+		p_unicode: "pink",
+		g_unicode: "gold",
+		w_unicode: "white",
+		c_unicode: "center",
+		d_unicode: "dispenser_center",
+		r_unicode: "relative_reference",
+		z_unicode: "delta",
+		x_unicode: "relative_delta",
+		o_unicode: "reset_operator",
+		i_unicode: "request_engineer_auth",
+	}
+	return key_map.get(key)
+
+
 def request_operator_and_item():
 	operator_id = _prompt_text_with_tk("ID Operador", "Ingresa ID de operador:")
 	item_id = _prompt_text_with_tk("ID Item", "Ingresa ID de item:")
@@ -511,6 +532,83 @@ def process_pending_id_requests():
 		request_operator_and_item()
 	elif do_reset_item:
 		request_item_only()
+
+
+def handle_command(cmd, source="tcp"):
+	delta_saved_path = None
+	auth_saved_path = None
+	log_text = None
+
+	if cmd == "request_engineer_auth":
+		auth_result = request_engineer_authorization()
+		auth_saved_path = save_auth_request_result(auth_result, datetime.now())
+		response = b"oki\n" if auth_result else b"nooki\n"
+		log_text = response.decode("utf-8", errors="ignore").strip()
+		with state_lock:
+			latest_state["last_response"] = response
+		return response, log_text, delta_saved_path, auth_saved_path
+
+	with state_lock:
+		if cmd in ("pink", "gold", "white"):
+			latest_state["pending_filter"] = cmd
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "center":
+			latest_state["pending_center"] = True
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "dispenser_center":
+			latest_state["pending_dispenser_center"] = True
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "relative_reference":
+			latest_state["pending_relative_reference"] = True
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "reset_operator":
+			latest_state["operator_id"] = None
+			latest_state["item_id"] = None
+			latest_state["pending_reset_operator"] = True
+			latest_state["pending_reset_item"] = False
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "reset_item":
+			latest_state["item_id"] = None
+			latest_state["pending_reset_item"] = True
+			response = b"OK\n"
+			log_text = "OK"
+
+		elif cmd == "delta":
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			operator_id = latest_state["operator_id"] or ""
+			item_id = latest_state["item_id"] or ""
+			now = datetime.now()
+			_, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
+			response, log_text = format_tcp_response(x, y)
+
+		elif cmd == "relative_delta":
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			operator_id = latest_state["operator_id"] or ""
+			item_id = latest_state["item_id"] or ""
+			now = datetime.now()
+			_, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
+			response, log_text = format_tcp_response(x, y)
+
+		else:
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			response, log_text = format_tcp_response(x, y)
+
+		latest_state["last_response"] = response
+
+	return response, log_text, delta_saved_path, auth_saved_path
 
 
 request_operator_and_item()
@@ -565,83 +663,17 @@ def recv_server_thread():
 
 				print("comando:")
 				print(cmd)
-
-				if cmd == "request_engineer_auth":
-					auth_result = request_engineer_authorization()
-					auth_saved_path = save_auth_request_result(auth_result, datetime.now())
-					response = b"oki\n" if auth_result else b"nooki\n"
-					with state_lock:
-						latest_state["last_response"] = response
-					try:
-						conn.sendall(response)
-						print(f"[SENT] to {addr}: {response.decode('utf-8', errors='ignore').strip()}")
-						print(f"[AUTH DATA] saved {auth_saved_path}")
-					except Exception as e:
-						print(f"[SEND ERROR] {e}")
-						break
-					continue
-
-				with state_lock:
-					if cmd in ("pink", "gold", "white"):
-						latest_state["pending_filter"] = cmd
-						response = b"OK\n"
-
-					elif cmd == "center":
-						latest_state["pending_center"] = True
-						response = b"OK\n"
-
-					elif cmd == "dispenser_center":
-						latest_state["pending_dispenser_center"] = True
-						response = b"OK\n"
-
-					elif cmd == "relative_reference":
-						latest_state["pending_relative_reference"] = True
-						response = b"OK\n"
-
-					elif cmd == "reset_operator":
-						latest_state["operator_id"] = None
-						latest_state["item_id"] = None
-						latest_state["pending_reset_operator"] = True
-						latest_state["pending_reset_item"] = False
-						response = b"OK\n"
-
-					elif cmd == "reset_item":
-						latest_state["item_id"] = None
-						latest_state["pending_reset_item"] = True
-						response = b"OK\n"
-
-					elif cmd == "delta":
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						operator_id = latest_state["operator_id"] or ""
-						item_id = latest_state["item_id"] or ""
-						now = datetime.now()
-						payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-						response, response_text = format_tcp_response(x, y)
-						print(f"[TCP Z RESPONSE] {response_text}")
-						# response = payload
-
-					elif cmd == "relative_delta":
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						operator_id = latest_state["operator_id"] or ""
-						item_id = latest_state["item_id"] or ""
-						now = datetime.now()
-						payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-						response, _ = format_tcp_response(x, y)
-
-					else:
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						response, _ = format_tcp_response(x, y)
-
-					latest_state["last_response"] = response
+				response, log_text, delta_saved_path, auth_saved_path = handle_command(cmd, source="tcp")
 
 				try:
 					conn.sendall(response)
 					print(f"[SENT] to {addr}: {response.decode('utf-8', errors='ignore').strip()}")
 					if delta_saved_path:
 						print(f"[DATA] saved {delta_saved_path}")
+					if auth_saved_path:
+						print(f"[AUTH DATA] saved {auth_saved_path}")
+					if cmd == "delta" and log_text:
+						print(f"[TCP Z RESPONSE] {log_text}")
 				except Exception as e:
 					print(f"[SEND ERROR] {e}")
 					break
@@ -833,6 +865,7 @@ camera_index, area, area_dispenser, is_rotate, is_rotate90, edge = load_camera_a
 
 cam = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
 is_frame_ok = False
+last_handled_key = None
 
 while not cam.isOpened() and not is_frame_ok:
 	cam = cv2.VideoCapture(camera_index)
@@ -972,6 +1005,14 @@ while True:
 	cv2.imshow("Filtered Dispenser", dispenser_msk)
 
 	key = cv2.waitKey(1)
+	if key == -1 or key == 255:
+		last_handled_key = None
+		continue
+
+	if key == last_handled_key:
+		continue
+
+	last_handled_key = key
 
 	if key == q_unicode:
 		break
@@ -979,23 +1020,11 @@ while True:
 	if key == b_unicode and pt_center is not None:
 		saved_reference_center = pt_center
 
-	if key == c_unicode and pt_center is not None and dispenser_center is not None:
-		saved_dispenser_reference_center = dispenser_center
-		if current_relative_diff is not None:
-			saved_relative_diff = current_relative_diff
-
 	if key == n_unicode and dispenser_center is not None:
 		saved_dispenser_reference_center = dispenser_center
 
 	if key == m_unicode and current_relative_diff is not None:
 		saved_relative_diff = current_relative_diff
-
-	if key == x_unicode:
-		with state_lock:
-			relative_x = latest_state["relative_x_diff"]
-			relative_y = latest_state["relative_y_diff"]
-		_, response_text = format_tcp_response(relative_x, relative_y)
-		print(f"[RELATIVE DELTA] {response_text}")
 
 	if key == one_unicode:
 		filter_selected = filter_pink
@@ -1012,22 +1041,15 @@ while True:
 		saved_reference_center = None
 		saved_relative_diff = None
 
-	if key == p_unicode:
-		filter_selected = filter_pink
-		saved_reference_center = None
-		saved_relative_diff = None
-
-	if key == o_unicode:
-		with state_lock:
-			latest_state["operator_id"] = None
-			latest_state["item_id"] = None
-			latest_state["pending_reset_operator"] = True
-			latest_state["pending_reset_item"] = False
-
-	if key == i_unicode:
-		with state_lock:
-			latest_state["item_id"] = None
-			latest_state["pending_reset_item"] = True
+	key_cmd = get_key_command(key)
+	if key_cmd:
+		response, log_text, delta_saved_path, auth_saved_path = handle_command(key_cmd, source="keyboard")
+		if log_text:
+			print(f"[KEY CMD] {key_cmd}: {log_text}")
+		if delta_saved_path:
+			print(f"[KEY DATA] saved {delta_saved_path}")
+		if auth_saved_path:
+			print(f"[KEY AUTH DATA] saved {auth_saved_path}")
 
 cam.release()
 cv2.destroyAllWindows()
