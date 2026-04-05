@@ -281,6 +281,7 @@ latest_state = {
 	"item_id": None,
 	"pending_reset_operator": False,
 	"pending_reset_item": False,
+	"reset_operator_in_progress": False,
 }
 
 
@@ -529,7 +530,11 @@ def process_pending_id_requests():
 			latest_state["pending_reset_item"] = False
 
 	if do_reset_operator:
-		request_operator_and_item()
+		try:
+			request_operator_and_item()
+		finally:
+			with state_lock:
+				latest_state["reset_operator_in_progress"] = False
 	elif do_reset_item:
 		request_item_only()
 
@@ -570,12 +575,17 @@ def handle_command(cmd, source="tcp"):
 			log_text = "OK"
 
 		elif cmd == "reset_operator":
-			latest_state["operator_id"] = None
-			latest_state["item_id"] = None
-			latest_state["pending_reset_operator"] = True
-			latest_state["pending_reset_item"] = False
-			response = b"OK\n"
-			log_text = "OK"
+			if latest_state["pending_reset_operator"] or latest_state["reset_operator_in_progress"]:
+				response = b"OK\n"
+				log_text = "OK (reset_operator already pending)"
+			else:
+				latest_state["operator_id"] = None
+				latest_state["item_id"] = None
+				latest_state["pending_reset_operator"] = True
+				latest_state["pending_reset_item"] = False
+				latest_state["reset_operator_in_progress"] = True
+				response = b"OK\n"
+				log_text = "OK"
 
 		elif cmd == "reset_item":
 			latest_state["item_id"] = None
