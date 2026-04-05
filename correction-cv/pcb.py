@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import re
+import struct
 import tkinter as tk
 from datetime import datetime
 
@@ -179,6 +180,64 @@ def load_config():
 
 IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
 
+
+def load_crunch_coms_config():
+	"""Load integrated crunch listener config from config.json next to script/.exe."""
+	defaults = {
+		"enabled": True,
+		"ip": "192.168.10.34",
+		"port": 2000,
+		"size": 2048,
+		"real_count": 360,
+		"real_stride": 4,
+		"real_start": 0,
+		"output_dir": "data/crunch",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if isinstance(data, dict) and isinstance(data.get("crunch_coms"), dict):
+			data = data["crunch_coms"]
+		else:
+			data = {}
+
+		return (
+			bool(data.get("enabled", defaults["enabled"])),
+			str(data.get("ip", defaults["ip"])),
+			int(data.get("port", defaults["port"])),
+			int(data.get("size", defaults["size"])),
+			int(data.get("real_count", defaults["real_count"])),
+			int(data.get("real_stride", defaults["real_stride"])),
+			int(data.get("real_start", defaults["real_start"])),
+			str(data.get("output_dir", defaults["output_dir"])),
+		)
+	except Exception as e:
+		print(f"[CONFIG:CRUNCH] Using defaults. Reason: {e}")
+		return (
+			defaults["enabled"],
+			defaults["ip"],
+			defaults["port"],
+			defaults["size"],
+			defaults["real_count"],
+			defaults["real_stride"],
+			defaults["real_start"],
+			defaults["output_dir"],
+		)
+
+
+(
+	CRUNCH_COMS_ENABLED,
+	CRUNCH_COMS_IP,
+	CRUNCH_COMS_PORT,
+	CRUNCH_COMS_SIZE,
+	CRUNCH_REAL_COUNT,
+	CRUNCH_REAL_STRIDE,
+	CRUNCH_REAL_START,
+	CRUNCH_OUTPUT_DIR,
+) = load_crunch_coms_config()
+
 # Shared state for detection results + remote control
 state_lock = threading.Lock()
 latest_state = {
@@ -227,6 +286,42 @@ def save_delta_payload(x, y, operator_id, item_id, now):
 		f.write(payload)
 
 	return payload, file_path
+
+
+def read_real_at(data: bytes, offset: int) -> float | None:
+	end = offset + 4
+	if end > len(data):
+		return None
+	return struct.unpack(">f", data[offset:end])[0]
+
+
+def read_real_array(data: bytes, start_offset: int, count: int, stride: int = 4):
+	values = []
+	for index in range(count):
+		offset = start_offset + index * stride
+		values.append(read_real_at(data, offset))
+	return values
+
+
+def format_crunch_payload(operator_id, item_id, now, values):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	parts = [str(operator_id or ""), str(item_id or ""), timestamp]
+	parts.extend("" if value is None else str(value) for value in values)
+	return ",".join(parts) + "\n", timestamp
+
+
+def save_crunch_payload(operator_id, item_id, now, values):
+	payload_text, timestamp = format_crunch_payload(operator_id, item_id, now, values)
+	output_dir = os.path.join(get_base_path(), CRUNCH_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+
+	operator_token = _sanitize_filename_token(operator_id)
+	item_token = _sanitize_filename_token(item_id)
+	file_path = os.path.join(output_dir, f"{timestamp}_{operator_token}_{item_token}.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(payload_text)
+
+	return payload_text.encode("utf-8"), file_path
 
 
 def compute_scaled_delta(reference_point, current_point):
@@ -547,8 +642,66 @@ def send_server_thread():
 				print(f"[SEND SERVER ERROR] {e}")
 
 
+def crunch_recv_server_thread():
+	if not CRUNCH_COMS_ENABLED:
+		print("[CRUNCH COMMS] Disabled in config.")
+		return
+
+	server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	try:
+		server.bind((CRUNCH_COMS_IP, CRUNCH_COMS_PORT))
+	except OSError as e:
+		print(f"[CRUNCH BIND ERROR] {e}")
+		return
+
+	server.listen()
+	print(f"[LISTENING] Crunch recv server listening on {CRUNCH_COMS_IP}:{CRUNCH_COMS_PORT}")
+
+	while True:
+		try:
+			conn, addr = server.accept()
+		except OSError as e:
+			print(f"[CRUNCH ACCEPT ERROR] {e}")
+			sleep(0.1)
+			continue
+
+		print(f"[CRUNCH CONNECTED] {addr}")
+		with conn:
+			try:
+				data = conn.recv(CRUNCH_COMS_SIZE)
+			except Exception as e:
+				print(f"[CRUNCH RX ERROR] {e}")
+				continue
+
+			if not data:
+				print("[CRUNCH DISCONNECTED] peer closed connection")
+				continue
+
+			print(f"[CRUNCH RECEIVED BYTES] {len(data)}")
+			expected_size = CRUNCH_REAL_START + (CRUNCH_REAL_COUNT * CRUNCH_REAL_STRIDE)
+			if len(data) < expected_size:
+				print(f"[CRUNCH WARN] Expected {expected_size} bytes, got {len(data)}")
+
+			values = read_real_array(
+				data,
+				CRUNCH_REAL_START,
+				CRUNCH_REAL_COUNT,
+				CRUNCH_REAL_STRIDE,
+			)
+
+			with state_lock:
+				operator_id = latest_state["operator_id"] or ""
+				item_id = latest_state["item_id"] or ""
+
+			now = datetime.now()
+			_, saved_path = save_crunch_payload(operator_id, item_id, now, values)
+			print(f"[CRUNCH DATA] saved {saved_path}")
+
+
 threading.Thread(target=recv_server_thread, daemon=True).start()
 threading.Thread(target=send_server_thread, daemon=True).start()
+threading.Thread(target=crunch_recv_server_thread, daemon=True).start()
 
 def load_camera_area_config():
 	"""Load camera index and detection area from config.json + extra options."""

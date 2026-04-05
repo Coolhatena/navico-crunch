@@ -1,5 +1,7 @@
 __pycache__/
 cv-tools/
 crunch_coms/
+correction-cv/data/
 
 helpers.py
+.codex
