@@ -354,11 +354,12 @@ def save_crunch_payload(operator_id, item_id, now, values):
 
 def save_auth_request_result(result_text, now):
 	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	content_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 	output_dir = os.path.join(get_base_path(), AUTH_REQUEST_OUTPUT_DIR)
 	os.makedirs(output_dir, exist_ok=True)
 	file_path = os.path.join(output_dir, f"{timestamp}.txt")
 	with open(file_path, "w", encoding="utf-8") as f:
-		f.write(result_text)
+		f.write(f"{result_text} {content_timestamp}")
 	return file_path
 
 
@@ -371,7 +372,8 @@ def compute_scaled_delta(reference_point, current_point):
 def format_tcp_response(x_value, y_value):
 	response_x = round(x_value * TCP_X_FACTOR, 2)
 	response_y = round(y_value * TCP_Y_FACTOR, 2)
-	response_text = f"{response_x},{response_y}"
+	# response_text = f"{response_x},{response_y}" // Por el momento, solo se enviara Y
+	response_text = f"0.0,{response_y}"
 	return response_text.encode("utf-8") + b"\n", response_text
 
 
@@ -562,7 +564,7 @@ def handle_command(cmd, source="tcp"):
 	if cmd == "request_engineer_auth":
 		auth_result = request_engineer_authorization()
 		auth_saved_path = save_auth_request_result(auth_result, datetime.now())
-		response = b"iii" if auth_result else b"III"
+		response = b"i" if auth_result else b"I"
 		log_text = response.decode("utf-8", errors="ignore").strip()
 		with state_lock:
 			latest_state["last_response"] = response
@@ -640,7 +642,7 @@ def handle_command(cmd, source="tcp"):
 		reset_operator_done_event.wait()
 		with state_lock:
 			reset_success = bool(latest_state["reset_operator_result"])
-		response = b"ooo" if reset_success else b"OOO"
+		response = b"o" if reset_success else b"O"
 		log_text = response.decode("utf-8", errors="ignore").strip()
 		with state_lock:
 			latest_state["last_response"] = response
