@@ -39,5 +39,19 @@
     "real_stride": 4,
     "real_start": 0,
     "output_dir": "correction_data"
-  }
+  },
+  "item_ids": [
+	{
+		"label": "Lote de Xtal",
+		"key": "lote_xtal"
+	},
+	{
+		"label": "Flex PCB",
+		"key": "flex_pcb"
+	},
+	{
+		"label": "Epoxy",
+		"key": "epoxy"
+	}
+  ]
 }
