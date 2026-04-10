@@ -382,10 +382,10 @@ def format_crunch_payload(operator_id, item_ids, now, values):
 		key = item_cfg["key"]
 		value = "" if not isinstance(item_ids, dict) else str(item_ids.get(key, "") or "")
 		parts.append(f"{key}: {value}")
-	data_text = ",".join("" if value is None else str(value) for value in values)
+	data_lines = "\n".join("" if value is None else str(value) for value in values)
 	parts.append(f"timestamp: {timestamp}")
-	parts.append(f"datos: {data_text}")
-	return ", ".join(parts) + "\n", timestamp
+	header_text = ", ".join(parts)
+	return f"{header_text}\ndatos:\n{data_lines}\n", timestamp
 
 
 def save_crunch_payload(operator_id, item_ids, now, values):

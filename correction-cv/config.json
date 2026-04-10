@@ -38,7 +38,7 @@
     "real_count": 100,
     "real_stride": 4,
     "real_start": 0,
-    "output_dir": "correction_data"
+    "output_dir": "laser_data"
   },
   "item_ids": [
 	{
