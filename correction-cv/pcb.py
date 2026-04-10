@@ -489,6 +489,8 @@ def _prompt_text_with_tk(title, prompt, require_non_empty=True):
 			root.title(title)
 			root.resizable(False, False)
 			root.attributes("-topmost", True)
+			root.geometry("960x540")
+			root.minsize(960, 540)
 		except tk.TclError:
 			value = input(f"{prompt} ").strip()
 			if require_non_empty and not value:
@@ -497,17 +499,17 @@ def _prompt_text_with_tk(title, prompt, require_non_empty=True):
 
 		value_ref = {"value": None}
 
-		frame = tk.Frame(root, padx=16, pady=12)
-		frame.pack()
+		frame = tk.Frame(root, padx=48, pady=36)
+		frame.pack(fill="both", expand=True)
 
-		label = tk.Label(frame, text=prompt)
-		label.pack(anchor="w")
+		label = tk.Label(frame, text=prompt, font=("TkDefaultFont", 30))
+		label.pack(anchor="w", pady=(0, 18))
 
-		entry = tk.Entry(frame, width=32)
-		entry.pack(fill="x", pady=(6, 4))
+		entry = tk.Entry(frame, width=60, font=("TkDefaultFont", 30))
+		entry.pack(fill="x", ipady=16, pady=(0, 12))
 		entry.focus_set()
 
-		error_label = tk.Label(frame, text="", fg="red")
+		error_label = tk.Label(frame, text="", fg="red", font=("TkDefaultFont", 22))
 		error_label.pack(anchor="w")
 
 		def submit(event=None):
@@ -522,8 +524,15 @@ def _prompt_text_with_tk(title, prompt, require_non_empty=True):
 			value_ref["value"] = ""
 			root.destroy()
 
-		submit_btn = tk.Button(frame, text="Submit", command=submit)
-		submit_btn.pack(pady=(8, 0))
+		submit_btn = tk.Button(
+			frame,
+			text="Submit",
+			command=submit,
+			font=("TkDefaultFont", 26),
+			padx=36,
+			pady=18,
+		)
+		submit_btn.pack(pady=(24, 0), anchor="center")
 
 		root.bind("<Return>", submit)
 		root.protocol("WM_DELETE_WINDOW", lambda: None if require_non_empty else on_close())
