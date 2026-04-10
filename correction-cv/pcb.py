@@ -18,7 +18,7 @@ TCP_RECV_POLL_TIMEOUT_S = 0.5
 PIXEL_TO_DELTA_SCALE = 0.1
 TCP_X_FACTOR = -1
 TCP_Y_FACTOR = -1
-VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i")
+VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i", "s")
 
 
 def debug_recv_data(data):
@@ -57,6 +57,7 @@ def extract_cmd(data):
 		"x": "relative_delta",
 		"o": "reset_operator",
 		"i": "request_engineer_auth",
+		"s": "reset_item",
 	}
 
 	tokens = re.split(r"[^a-z0-9_]+", text)
@@ -139,6 +140,7 @@ g_unicode = ord("g")
 w_unicode = ord("w")
 d_unicode = ord("d")
 r_unicode = ord("r")
+s_unicode = ord("s")
 
 saved_reference_center = None
 saved_dispenser_reference_center = None
@@ -558,6 +560,7 @@ def get_key_command(key):
 		x_unicode: "relative_delta",
 		o_unicode: "reset_operator",
 		i_unicode: "request_engineer_auth",
+		s_unicode: "reset_item",
 	}
 	return key_map.get(key)
 
