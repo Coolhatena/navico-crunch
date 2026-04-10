@@ -26,8 +26,8 @@
   "camera_index": 0,
   "rotate": false,
   "rotate90": true,
-  "area": [[25, 290] ,[150, 450]],
-  "area_dispenser": [[100, 360] ,[300, 440]],
+  "area": [[25, 250] ,[150, 480]],
+  "area_dispenser": [[10, 320] ,[300, 440]],
   "edge": "left",
   "auth_request_output_dir": "authlog",
   "crunch_coms": {
