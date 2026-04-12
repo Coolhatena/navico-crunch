@@ -43,15 +43,18 @@
   "item_ids": [
 	{
 		"label": "Lote de Xtal",
-		"key": "lote_xtal"
+		"key": "lote_xtal",
+		"command_char": ""
 	},
 	{
 		"label": "Flex PCB",
-		"key": "flex_pcb"
+		"key": "flex_pcb",
+		"command_char": ""
 	},
 	{
 		"label": "Epoxy",
-		"key": "epoxy"
+		"key": "epoxy",
+		"command_char": ""
 	}
   ]
 }

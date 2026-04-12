@@ -19,6 +19,7 @@ PIXEL_TO_DELTA_SCALE = 0.1
 TCP_X_FACTOR = -1
 TCP_Y_FACTOR = -1
 VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i", "s")
+ITEM_RESET_CMD_PREFIX = "reset_items_by_command:"
 
 
 def debug_recv_data(data):
@@ -77,6 +78,11 @@ def extract_cmd(data):
 		return "dispenser_center"
 	if "relative" in text:
 		return "relative_reference"
+
+	for token in tokens:
+		if token and get_item_configs_for_command(token):
+			return f"{ITEM_RESET_CMD_PREFIX}{token}"
+
 	return ""
 
 def get_base_path():
@@ -278,11 +284,19 @@ def load_item_ids_config():
 			continue
 		label = str(raw_item.get("label", "")).strip()
 		key = str(raw_item.get("key", "")).strip()
+		command_char = str(raw_item.get("command_char", "")).strip().lower()
 		if not label or not key:
 			continue
-		valid_items.append({"label": label, "key": key})
+		valid_items.append({"label": label, "key": key, "command_char": command_char})
 
 	return valid_items
+
+
+def get_item_configs_for_command(command_char):
+	command_char = str(command_char or "").strip().lower()
+	if not command_char:
+		return []
+	return [item_cfg for item_cfg in ITEM_ID_CONFIGS if item_cfg.get("command_char") == command_char]
 
 
 (
@@ -315,6 +329,7 @@ latest_state = {
 	"item_ids": {},
 	"pending_reset_operator": False,
 	"pending_reset_item": False,
+	"pending_reset_item_command_char": None,
 	"reset_operator_in_progress": False,
 	"reset_operator_result": None,
 }
@@ -572,13 +587,17 @@ def request_required_text(title, prompt):
 			return value
 
 
-def request_all_item_ids():
+def request_item_ids(item_configs):
 	item_values = {}
-	for item_cfg in ITEM_ID_CONFIGS:
+	for item_cfg in item_configs:
 		label = item_cfg["label"]
 		key = item_cfg["key"]
 		item_values[key] = request_required_text("ID Item", f"Escanee el codigo: {label}")
 	return item_values
+
+
+def request_all_item_ids():
+	return request_item_ids(ITEM_ID_CONFIGS)
 
 
 def request_operator_and_item():
@@ -590,10 +609,10 @@ def request_operator_and_item():
 	print(f"[IDS] operador={operator_id} items={item_ids}")
 
 
-def request_item_only():
-	item_ids = request_all_item_ids()
+def request_item_only(item_configs=None):
+	item_ids = request_item_ids(item_configs or ITEM_ID_CONFIGS)
 	with state_lock:
-		latest_state["item_ids"] = item_ids
+		latest_state["item_ids"].update(item_ids)
 	print(f"[IDS] items={item_ids}")
 
 
@@ -604,12 +623,15 @@ def process_pending_id_requests():
 	with state_lock:
 		do_reset_operator = latest_state["pending_reset_operator"]
 		do_reset_item = latest_state["pending_reset_item"]
+		reset_item_command_char = latest_state["pending_reset_item_command_char"]
 
 		if do_reset_operator:
 			latest_state["pending_reset_operator"] = False
 			latest_state["pending_reset_item"] = False
+			latest_state["pending_reset_item_command_char"] = None
 		elif do_reset_item:
 			latest_state["pending_reset_item"] = False
+			latest_state["pending_reset_item_command_char"] = None
 
 	if do_reset_operator:
 		reset_success = False
@@ -624,7 +646,13 @@ def process_pending_id_requests():
 				latest_state["reset_operator_result"] = reset_success
 			reset_operator_done_event.set()
 	elif do_reset_item:
-		request_item_only()
+		item_configs = None
+		if reset_item_command_char:
+			item_configs = get_item_configs_for_command(reset_item_command_char)
+			if not item_configs:
+				print(f"[RESET ITEM WARN] No item_ids configured for command_char={reset_item_command_char!r}")
+				return
+		request_item_only(item_configs)
 
 
 def handle_command(cmd, source="tcp"):
@@ -672,6 +700,7 @@ def handle_command(cmd, source="tcp"):
 				latest_state["item_ids"] = {}
 				latest_state["pending_reset_operator"] = True
 				latest_state["pending_reset_item"] = False
+				latest_state["pending_reset_item_command_char"] = None
 				latest_state["reset_operator_in_progress"] = True
 				latest_state["reset_operator_result"] = None
 				reset_operator_done_event.clear()
@@ -682,8 +711,23 @@ def handle_command(cmd, source="tcp"):
 		elif cmd == "reset_item":
 			latest_state["item_ids"] = {}
 			latest_state["pending_reset_item"] = True
+			latest_state["pending_reset_item_command_char"] = None
 			response = b"OK\n"
 			log_text = "OK"
+
+		elif cmd.startswith(ITEM_RESET_CMD_PREFIX):
+			command_char = cmd[len(ITEM_RESET_CMD_PREFIX):]
+			item_configs = get_item_configs_for_command(command_char)
+			if item_configs:
+				for item_cfg in item_configs:
+					latest_state["item_ids"].pop(item_cfg["key"], None)
+				latest_state["pending_reset_item"] = True
+				latest_state["pending_reset_item_command_char"] = command_char
+				response = b"OK\n"
+				log_text = "OK"
+			else:
+				response = b"UNKNOWN\n"
+				log_text = "UNKNOWN"
 
 		elif cmd == "delta":
 			x = latest_state["relative_x_diff"]
