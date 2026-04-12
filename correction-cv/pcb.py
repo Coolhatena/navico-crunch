@@ -39,26 +39,26 @@ def debug_recv_data(data):
 
 
 def extract_cmd(data):
-	"""Return first valid command token found in payload."""
+	"""Return first valid command token and canonical response char found in payload."""
 	text = data.decode("utf-8", errors="ignore").strip().lower()
 	if not text:
-		return ""
+		return "", None
 
 	aliases = {
-		"pink": "pink",
-		"gold": "gold",
-		"white": "white",
-		"p": "pink",
-		"g": "gold",
-		"w": "white",
-		"c": "center",
-		"d": "dispenser_center",
-		"r": "relative_reference",
-		"z": "delta",
-		"x": "relative_delta",
-		"o": "reset_operator",
-		"i": "request_engineer_auth",
-		"s": "reset_item",
+		"pink": ("pink", "p"),
+		"gold": ("gold", "g"),
+		"white": ("white", "w"),
+		"p": ("pink", "p"),
+		"g": ("gold", "g"),
+		"w": ("white", "w"),
+		"c": ("center", "c"),
+		"d": ("dispenser_center", "d"),
+		"r": ("relative_reference", "r"),
+		"z": ("delta", "z"),
+		"x": ("relative_delta", "x"),
+		"o": ("reset_operator", "o"),
+		"i": ("request_engineer_auth", "i"),
+		"s": ("reset_item", "s"),
 	}
 
 	tokens = re.split(r"[^a-z0-9_]+", text)
@@ -67,23 +67,23 @@ def extract_cmd(data):
 			return aliases[token]
 
 	if "pink" in text:
-		return "pink"
+		return "pink", "p"
 	if "gold" in text:
-		return "gold"
+		return "gold", "g"
 	if "white" in text:
-		return "white"
-	if "center" in text:
-		return "center"
+		return "white", "w"
 	if "dispenser" in text:
-		return "dispenser_center"
+		return "dispenser_center", "d"
+	if "center" in text:
+		return "center", "c"
 	if "relative" in text:
-		return "relative_reference"
+		return "relative_reference", "r"
 
 	for token in tokens:
 		if token and get_item_configs_for_command(token):
-			return f"{ITEM_RESET_CMD_PREFIX}{token}"
+			return f"{ITEM_RESET_CMD_PREFIX}{token}", token
 
-	return ""
+	return "", None
 
 def get_base_path():
 	if getattr(sys, "frozen", False):  # ejecutándose como .exe
@@ -580,6 +580,32 @@ def get_key_command(key):
 	return key_map.get(key)
 
 
+def get_command_response_char(cmd):
+	response_chars = {
+		"pink": "p",
+		"gold": "g",
+		"white": "w",
+		"center": "c",
+		"dispenser_center": "d",
+		"relative_reference": "r",
+		"reset_operator": "o",
+		"request_engineer_auth": "i",
+		"reset_item": "s",
+	}
+	if cmd.startswith(ITEM_RESET_CMD_PREFIX):
+		return cmd[len(ITEM_RESET_CMD_PREFIX):]
+	return response_chars.get(cmd)
+
+
+def format_command_response(response_char, success=True):
+	if not response_char:
+		response_char = ""
+	response_text = str(response_char).strip().lower()
+	if not success:
+		response_text = response_text.upper()
+	return response_text.encode("utf-8"), response_text
+
+
 def request_required_text(title, prompt):
 	while True:
 		value = _prompt_text_with_tk(title, prompt, require_non_empty=False)
@@ -655,16 +681,17 @@ def process_pending_id_requests():
 		request_item_only(item_configs)
 
 
-def handle_command(cmd, source="tcp"):
+def handle_command(cmd, source="tcp", response_char=None):
 	delta_saved_path = None
 	auth_saved_path = None
 	log_text = None
+	if response_char is None:
+		response_char = get_command_response_char(cmd)
 
 	if cmd == "request_engineer_auth":
 		auth_result = request_engineer_authorization()
 		auth_saved_path = save_auth_request_result(auth_result, datetime.now())
-		response = b"i" if auth_result else b"I"
-		log_text = response.decode("utf-8", errors="ignore").strip()
+		response, log_text = format_command_response(response_char, success=bool(auth_result))
 		with state_lock:
 			latest_state["last_response"] = response
 		return response, log_text, delta_saved_path, auth_saved_path
@@ -672,29 +699,25 @@ def handle_command(cmd, source="tcp"):
 	with state_lock:
 		if cmd in ("pink", "gold", "white"):
 			latest_state["pending_filter"] = cmd
-			response = b"OK\n"
-			log_text = "OK"
+			response, log_text = format_command_response(response_char)
 
 		elif cmd == "center":
 			latest_state["pending_center"] = True
-			response = b"OK\n"
-			log_text = "OK"
+			response, log_text = format_command_response(response_char)
 
 		elif cmd == "dispenser_center":
 			latest_state["pending_dispenser_center"] = True
-			response = b"OK\n"
-			log_text = "OK"
+			response, log_text = format_command_response(response_char)
 
 		elif cmd == "relative_reference":
 			latest_state["pending_relative_reference"] = True
-			response = b"OK\n"
-			log_text = "OK"
+			response, log_text = format_command_response(response_char)
 
 		elif cmd == "reset_operator":
 			if latest_state["pending_reset_operator"] or latest_state["reset_operator_in_progress"]:
 				should_wait_reset = source == "tcp"
-				response = b"o\n"
-				log_text = "o (reset_operator already pending)"
+				response, log_text = format_command_response(response_char)
+				log_text = f"{log_text} (reset_operator already pending)"
 			else:
 				latest_state["operator_id"] = None
 				latest_state["item_ids"] = {}
@@ -705,15 +728,13 @@ def handle_command(cmd, source="tcp"):
 				latest_state["reset_operator_result"] = None
 				reset_operator_done_event.clear()
 				should_wait_reset = source == "tcp"
-				response = b"o\n"
-				log_text = "o"
+				response, log_text = format_command_response(response_char)
 
 		elif cmd == "reset_item":
 			latest_state["item_ids"] = {}
 			latest_state["pending_reset_item"] = True
 			latest_state["pending_reset_item_command_char"] = None
-			response = b"OK\n"
-			log_text = "OK"
+			response, log_text = format_command_response(response_char)
 
 		elif cmd.startswith(ITEM_RESET_CMD_PREFIX):
 			command_char = cmd[len(ITEM_RESET_CMD_PREFIX):]
@@ -723,11 +744,9 @@ def handle_command(cmd, source="tcp"):
 					latest_state["item_ids"].pop(item_cfg["key"], None)
 				latest_state["pending_reset_item"] = True
 				latest_state["pending_reset_item_command_char"] = command_char
-				response = b"OK\n"
-				log_text = "OK"
+				response, log_text = format_command_response(response_char)
 			else:
-				response = b"UNKNOWN\n"
-				log_text = "UNKNOWN"
+				response, log_text = format_command_response(response_char, success=False)
 
 		elif cmd == "delta":
 			x = latest_state["relative_x_diff"]
@@ -757,8 +776,7 @@ def handle_command(cmd, source="tcp"):
 		reset_operator_done_event.wait()
 		with state_lock:
 			reset_success = bool(latest_state["reset_operator_result"])
-		response = b"o" if reset_success else b"O"
-		log_text = response.decode("utf-8", errors="ignore").strip()
+		response, log_text = format_command_response(response_char, success=reset_success)
 		with state_lock:
 			latest_state["last_response"] = response
 
@@ -813,11 +831,15 @@ def recv_server_thread():
 
 				data = chunk
 				debug_recv_data(data)
-				cmd = extract_cmd(data)
+				cmd, response_char = extract_cmd(data)
 
 				print("comando:")
 				print(cmd)
-				response, log_text, delta_saved_path, auth_saved_path = handle_command(cmd, source="tcp")
+				response, log_text, delta_saved_path, auth_saved_path = handle_command(
+					cmd,
+					source="tcp",
+					response_char=response_char,
+				)
 
 				try:
 					conn.sendall(response)

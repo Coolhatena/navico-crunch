@@ -40,21 +40,22 @@
     "real_start": 0,
     "output_dir": "laser_data"
   },
+  "item_ids_nota": "No se pueden usar como command_char: q, b, c, 1, 2, 3, o, p, i, n, m, x, z, g, w, d, r, s. Por que estan reservadas por el sistema",
   "item_ids": [
 	{
 		"label": "Lote de Xtal",
 		"key": "lote_xtal",
-		"command_char": ""
+		"command_char": "q"
 	},
 	{
 		"label": "Flex PCB",
 		"key": "flex_pcb",
-		"command_char": ""
+		"command_char": "q"
 	},
 	{
 		"label": "Epoxy",
 		"key": "epoxy",
-		"command_char": ""
+		"command_char": "q"
 	}
   ]
 }
