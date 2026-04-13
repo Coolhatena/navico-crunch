@@ -45,17 +45,17 @@
 	{
 		"label": "Lote de Xtal",
 		"key": "lote_xtal",
-		"command_char": "q"
+		"command_char": "t"
 	},
 	{
 		"label": "Flex PCB",
 		"key": "flex_pcb",
-		"command_char": "q"
+		"command_char": "t"
 	},
 	{
 		"label": "Epoxy",
 		"key": "epoxy",
-		"command_char": "q"
+		"command_char": "e"
 	}
   ]
 }
