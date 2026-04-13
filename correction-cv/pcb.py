@@ -524,7 +524,13 @@ def _prompt_text_with_tk(title, prompt, require_non_empty=True):
 
 		entry = tk.Entry(frame, width=60, font=("TkDefaultFont", 30))
 		entry.pack(fill="x", ipady=16, pady=(0, 12))
-		entry.focus_set()
+
+		def force_focus():
+			root.lift()
+			root.attributes("-topmost", True)
+			root.focus_force()
+			entry.focus_force()
+			root.after(300, lambda: root.attributes("-topmost", False))
 
 		error_label = tk.Label(frame, text="", fg="red", font=("TkDefaultFont", 22))
 		error_label.pack(anchor="w")
@@ -553,6 +559,7 @@ def _prompt_text_with_tk(title, prompt, require_non_empty=True):
 
 		root.bind("<Return>", submit)
 		root.protocol("WM_DELETE_WINDOW", lambda: None if require_non_empty else on_close())
+		root.after(100, force_focus)
 		root.mainloop()
 
 		if value_ref["value"] is not None:
