@@ -31,7 +31,7 @@
   "edge": "left",
   "items_on_start": true,
   "auth_request_output_dir": "authlog",
-  "operator_log_output_dir": "operatorlog",
+  "operator_log_output_dir": "authlog",
   "crunch_coms": {
     "enabled": true,
     "ip": "192.168.10.5",
