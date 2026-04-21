@@ -214,6 +214,30 @@ def load_auth_request_config():
 AUTH_REQUEST_OUTPUT_DIR = load_auth_request_config()
 
 
+def load_operator_config():
+	"""Load operator prompt/log config from config.json next to script/.exe."""
+	defaults = {
+		"items_on_start": True,
+		"operator_log_output_dir": "operatorlog",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if not isinstance(data, dict):
+			return defaults["items_on_start"], defaults["operator_log_output_dir"]
+		items_on_start = bool(data.get("items_on_start", defaults["items_on_start"]))
+		output_dir = str(data.get("operator_log_output_dir", defaults["operator_log_output_dir"]))
+		return items_on_start, output_dir
+	except Exception as e:
+		print(f"[CONFIG:OPERATOR] Using defaults. Reason: {e}")
+		return defaults["items_on_start"], defaults["operator_log_output_dir"]
+
+
+ITEMS_ON_START, OPERATOR_LOG_OUTPUT_DIR = load_operator_config()
+
+
 def load_crunch_coms_config():
 	"""Load integrated crunch listener config from config.json next to script/.exe."""
 	defaults = {
@@ -430,6 +454,17 @@ def save_auth_request_result(result_text, now):
 	return file_path
 
 
+def save_operator_request_result(operator_id, now):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	content_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+	output_dir = os.path.join(get_base_path(), OPERATOR_LOG_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+	file_path = os.path.join(output_dir, f"{timestamp} - OPERATOR.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(f"{operator_id} {content_timestamp}")
+	return file_path
+
+
 def compute_scaled_delta(reference_point, current_point):
 	x_diff = (reference_point[0] - current_point[0]) * PIXEL_TO_DELTA_SCALE
 	y_diff = (reference_point[1] - current_point[1]) * PIXEL_TO_DELTA_SCALE
@@ -633,13 +668,23 @@ def request_all_item_ids():
 	return request_item_ids(ITEM_ID_CONFIGS)
 
 
-def request_operator_and_item():
+def request_operator_only():
 	operator_id = request_required_text("ID Operador", "Escanee el id de operador")
-	item_ids = request_all_item_ids()
+	operator_saved_path = save_operator_request_result(operator_id, datetime.now())
 	with state_lock:
 		latest_state["operator_id"] = operator_id
+	print(f"[IDS] operador={operator_id}")
+	print(f"[OPERATOR DATA] saved {operator_saved_path}")
+	return operator_id, operator_saved_path
+
+
+def request_operator_and_item():
+	operator_id, operator_saved_path = request_operator_only()
+	item_ids = request_all_item_ids()
+	with state_lock:
 		latest_state["item_ids"] = item_ids
 	print(f"[IDS] operador={operator_id} items={item_ids}")
+	return operator_id, item_ids, operator_saved_path
 
 
 def request_item_only(item_configs=None):
@@ -669,7 +714,7 @@ def process_pending_id_requests():
 	if do_reset_operator:
 		reset_success = False
 		try:
-			request_operator_and_item()
+			request_operator_only()
 			reset_success = True
 		except Exception as e:
 			print(f"[RESET OPERATOR ERROR] {e}")
@@ -727,10 +772,7 @@ def handle_command(cmd, source="tcp", response_char=None):
 				log_text = f"{log_text} (reset_operator already pending)"
 			else:
 				latest_state["operator_id"] = None
-				latest_state["item_ids"] = {}
 				latest_state["pending_reset_operator"] = True
-				latest_state["pending_reset_item"] = False
-				latest_state["pending_reset_item_command_char"] = None
 				latest_state["reset_operator_in_progress"] = True
 				latest_state["reset_operator_result"] = None
 				reset_operator_done_event.clear()
@@ -790,7 +832,9 @@ def handle_command(cmd, source="tcp", response_char=None):
 	return response, log_text, delta_saved_path, auth_saved_path
 
 
-request_operator_and_item()
+request_operator_only()
+if ITEMS_ON_START:
+	request_item_only()
 
 def mouse_cb(event, x, y, flags, param):
 	if event == cv2.EVENT_LBUTTONDOWN:

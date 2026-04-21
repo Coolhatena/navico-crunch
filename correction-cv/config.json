@@ -29,7 +29,9 @@
   "area": [[25, 250] ,[150, 480]],
   "area_dispenser": [[10, 320] ,[300, 440]],
   "edge": "left",
+  "items_on_start": true,
   "auth_request_output_dir": "authlog",
+  "operator_log_output_dir": "operatorlog",
   "crunch_coms": {
     "enabled": true,
     "ip": "192.168.10.5",
