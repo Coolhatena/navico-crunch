@@ -196,6 +196,30 @@ def load_config():
 IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
 
 
+def load_image_adjustment_config():
+	"""Load contrast/brightness applied before HSV conversion."""
+	defaults = {
+		"contrast": 1.0,
+		"brightness": 0,
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if not isinstance(data, dict):
+			return defaults["contrast"], defaults["brightness"]
+		contrast = float(data.get("contrast", defaults["contrast"]))
+		brightness = float(data.get("brightness", defaults["brightness"]))
+		return contrast, brightness
+	except Exception as e:
+		print(f"[CONFIG:IMAGE ADJUST] Using defaults. Reason: {e}")
+		return defaults["contrast"], defaults["brightness"]
+
+
+CONTRAST, BRIGHTNESS = load_image_adjustment_config()
+
+
 def load_auth_request_config():
 	"""Load authorization request storage config from config.json next to script/.exe."""
 	defaults = {
@@ -481,6 +505,14 @@ def format_tcp_response(x_value, y_value):
 	return response_text.encode("utf-8") + b"\n", response_text
 
 
+def apply_contrast_brightness(frame, contrast, brightness):
+	return cv2.convertScaleAbs(
+		frame,
+		alpha=contrast,
+		beta=brightness,
+	)
+
+
 def detect_contour_center(frame, area_coords, filter_pair, edge_mode):
 	x1_area, y1_area = area_coords[0]
 	x2_area, y2_area = area_coords[1]
@@ -557,21 +589,25 @@ def load_glue_config(default_roi):
 	base_path = get_base_path()
 	cfg_path = os.path.join(base_path, "config.json")
 	glue_roi = default_roi
+	cont_brig_on_deteccion = False
+	cont_brig_on_glue = False
 
 	try:
 		with open(cfg_path, "r", encoding="utf-8") as f:
 			data = json.load(f)
 
 		if not isinstance(data, dict):
-			return glue_roi
+			return glue_roi, cont_brig_on_deteccion, cont_brig_on_glue
 
 		glue_cfg = data.get("glue") if isinstance(data.get("glue"), dict) else {}
 		raw_glue_roi = glue_cfg.get("roi", data.get("roi"))
 		glue_roi = normalize_area(raw_glue_roi, default_roi)
+		cont_brig_on_deteccion = bool(glue_cfg.get("cont_brig_on_deteccion", False))
+		cont_brig_on_glue = bool(glue_cfg.get("cont_brig_on_glue", False))
 	except Exception as e:
 		print(f"[CONFIG:GLUE] Using defaults. Reason: {e}")
 
-	return glue_roi
+	return glue_roi, cont_brig_on_deteccion, cont_brig_on_glue
 
 
 def run_glue_pipeline(frame, roi_coords, filter_pair):
@@ -1151,7 +1187,7 @@ def load_camera_area_config():
 
 
 camera_index, area, area_dispenser, is_rotate, is_rotate90, edge = load_camera_area_config()
-glue_roi = load_glue_config(area)
+glue_roi, CONT_BRIG_ON_DETECCION, CONT_BRIG_ON_GLUE = load_glue_config(area)
 (x1, y1), (x2, y2) = area
 (dx1, dy1), (dx2, dy2) = area_dispenser
 
@@ -1178,9 +1214,13 @@ while True:
 	if is_rotate90:
 		frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
-	glue_frame = run_glue_pipeline(frame, glue_roi, filter_pink)
-	main_detection = detect_contour_center(frame, area, filter_selected, edge)
-	dispenser_detection = detect_contour_center(frame, area_dispenser, filter_dispenser, edge)
+	adjusted_frame = apply_contrast_brightness(frame, CONTRAST, BRIGHTNESS)
+	detection_frame = adjusted_frame if CONT_BRIG_ON_DETECCION else frame
+	glue_input_frame = adjusted_frame if CONT_BRIG_ON_GLUE else frame
+
+	glue_frame = run_glue_pipeline(glue_input_frame, glue_roi, filter_pink)
+	main_detection = detect_contour_center(detection_frame, area, filter_selected, edge)
+	dispenser_detection = detect_contour_center(detection_frame, area_dispenser, filter_dispenser, edge)
 	msk = main_detection["mask"] if main_detection["mask"] is not None else np.zeros((1, 1), dtype=np.uint8)
 	dispenser_msk = (
 		dispenser_detection["mask"] if dispenser_detection["mask"] is not None else np.zeros((1, 1), dtype=np.uint8)
@@ -1188,6 +1228,7 @@ while True:
 	pt_center = main_detection["center"]
 	dispenser_center = dispenser_detection["center"]
 
+	frame = detection_frame.copy()
 	cv2.rectangle(frame, area[0], area[1], (0, 255, 0), 2)
 	cv2.rectangle(frame, area_dispenser[0], area_dispenser[1], (255, 128, 0), 2)
 

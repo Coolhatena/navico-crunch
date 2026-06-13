@@ -194,6 +194,30 @@ def load_config():
 IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
 
 
+def load_image_adjustment_config():
+	"""Load contrast/brightness applied before HSV conversion."""
+	defaults = {
+		"contrast": 1.0,
+		"brightness": 0,
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if not isinstance(data, dict):
+			return defaults["contrast"], defaults["brightness"]
+		contrast = float(data.get("contrast", defaults["contrast"]))
+		brightness = float(data.get("brightness", defaults["brightness"]))
+		return contrast, brightness
+	except Exception as e:
+		print(f"[CONFIG:IMAGE ADJUST] Using defaults. Reason: {e}")
+		return defaults["contrast"], defaults["brightness"]
+
+
+CONTRAST, BRIGHTNESS = load_image_adjustment_config()
+
+
 def load_auth_request_config():
 	"""Load authorization request storage config from config.json next to script/.exe."""
 	defaults = {
@@ -477,6 +501,14 @@ def format_tcp_response(x_value, y_value):
 	# response_text = f"{response_x},{response_y}" // Por el momento, solo se enviara Y
 	response_text = f"0.0,{response_y}"
 	return response_text.encode("utf-8") + b"\n", response_text
+
+
+def apply_contrast_brightness(frame, contrast, brightness):
+	return cv2.convertScaleAbs(
+		frame,
+		alpha=contrast,
+		beta=brightness,
+	)
 
 
 def detect_contour_center(frame, area_coords, filter_pair, edge_mode):
@@ -1112,6 +1144,8 @@ while True:
 
 	if is_rotate90:
 		frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
+	frame = apply_contrast_brightness(frame, CONTRAST, BRIGHTNESS)
 
 	main_detection = detect_contour_center(frame, area, filter_selected, edge)
 	dispenser_detection = detect_contour_center(frame, area_dispenser, filter_dispenser, edge)

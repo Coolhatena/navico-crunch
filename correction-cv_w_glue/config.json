@@ -5,6 +5,8 @@
   "pixel_mm_scale": 0.1,
   "tcp_x_factor": 1,
   "tcp_y_factor": 1,
+  "contrast": 1.3,
+  "brightness": 10,
   "filters": {
     "pink": {
       "low": [0, 35, 70],
@@ -23,7 +25,7 @@
       "high": [104, 35, 255]
     }
   },
-  "camera_index": 0,
+  "camera_index": 2,
   "rotate": false,
   "rotate90": true,
   "area": [[25, 250], [150, 480]],
@@ -61,6 +63,8 @@
     }
   ],
   "glue": {
-    "roi": [[25, 290], [150, 450]]
+    "roi": [[25, 290], [150, 450]],
+    "cont_brig_on_deteccion": false,
+    "cont_brig_on_glue": true
   }
 }

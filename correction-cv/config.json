@@ -5,6 +5,8 @@
   "pixel_mm_scale": 0.1,
   "tcp_x_factor": 1,
   "tcp_y_factor": 1,
+  "contrast": 1.0,
+  "brightness": 0,
   "filters": {
     "pink": {
       "low": [0, 35, 70],
