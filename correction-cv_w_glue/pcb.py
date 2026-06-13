@@ -3,12 +3,13 @@ import cv2
 from time import sleep
 import numpy as np
 import helpers
-import sys
 import socket
 import threading
 import json
 import os
+import sys
 import re
+import struct
 import tkinter as tk
 from datetime import datetime
 
@@ -17,12 +18,9 @@ TCP_RECV_POLL_TIMEOUT_S = 0.5
 PIXEL_TO_DELTA_SCALE = 0.1
 TCP_X_FACTOR = -1
 TCP_Y_FACTOR = -1
-VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i")
+VALID_TCP_CMDS = ("pink", "gold", "white", "p", "g", "w", "c", "d", "r", "z", "x", "o", "i", "s")
+ITEM_RESET_CMD_PREFIX = "reset_items_by_command:"
 
-def get_base_path():
-	if getattr(sys, "frozen", False):  # ejecutándose como .exe
-		return os.path.dirname(sys.executable)
-	return os.path.dirname(os.path.abspath(__file__))
 
 def debug_recv_data(data):
 	"""Print useful diagnostics to infer payload encoding."""
@@ -41,25 +39,26 @@ def debug_recv_data(data):
 
 
 def extract_cmd(data):
-	"""Return first valid command token found in payload."""
+	"""Return first valid command token and canonical response char found in payload."""
 	text = data.decode("utf-8", errors="ignore").strip().lower()
 	if not text:
-		return ""
+		return "", None
 
 	aliases = {
-		"pink": "pink",
-		"gold": "gold",
-		"white": "white",
-		"p": "pink",
-		"g": "gold",
-		"w": "white",
-		"c": "center",
-		"d": "dispenser_center",
-		"r": "relative_reference",
-		"z": "delta",
-		"x": "relative_delta",
-		"o": "reset_operator",
-		"i": "reset_item",
+		"pink": ("pink", "p"),
+		"gold": ("gold", "g"),
+		"white": ("white", "w"),
+		"p": ("pink", "p"),
+		"g": ("gold", "g"),
+		"w": ("white", "w"),
+		"c": ("center", "c"),
+		"d": ("dispenser_center", "d"),
+		"r": ("relative_reference", "r"),
+		"z": ("delta", "z"),
+		"x": ("relative_delta", "x"),
+		"o": ("reset_operator", "o"),
+		"i": ("request_engineer_auth", "i"),
+		"s": ("reset_item", "s"),
 	}
 
 	tokens = re.split(r"[^a-z0-9_]+", text)
@@ -68,18 +67,29 @@ def extract_cmd(data):
 			return aliases[token]
 
 	if "pink" in text:
-		return "pink"
+		return "pink", "p"
 	if "gold" in text:
-		return "gold"
+		return "gold", "g"
 	if "white" in text:
-		return "white"
-	if "center" in text:
-		return "center"
+		return "white", "w"
 	if "dispenser" in text:
-		return "dispenser_center"
+		return "dispenser_center", "d"
+	if "center" in text:
+		return "center", "c"
 	if "relative" in text:
-		return "relative_reference"
-	return ""
+		return "relative_reference", "r"
+
+	for token in tokens:
+		if token and get_item_configs_for_command(token):
+			return f"{ITEM_RESET_CMD_PREFIX}{token}", token
+
+	return "", None
+
+
+def get_base_path():
+	if getattr(sys, "frozen", False):  # ejecutándose como .exe
+		return os.path.dirname(sys.executable)
+	return os.path.dirname(os.path.abspath(__file__))
 
 
 def load_filters_config():
@@ -133,6 +143,12 @@ i_unicode = ord("i")
 n_unicode = ord("n")
 m_unicode = ord("m")
 x_unicode = ord("x")
+z_unicode = ord("z")
+g_unicode = ord("g")
+w_unicode = ord("w")
+d_unicode = ord("d")
+r_unicode = ord("r")
+s_unicode = ord("s")
 
 saved_reference_center = None
 saved_dispenser_reference_center = None
@@ -179,6 +195,148 @@ def load_config():
 
 IP, PORT_RECV, PORT_SEND, PIXEL_TO_DELTA_SCALE, TCP_X_FACTOR, TCP_Y_FACTOR = load_config()
 
+
+def load_auth_request_config():
+	"""Load authorization request storage config from config.json next to script/.exe."""
+	defaults = {
+		"output_dir": "data/auth",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		output_dir = str(data.get("auth_request_output_dir", defaults["output_dir"])) if isinstance(data, dict) else defaults["output_dir"]
+		return output_dir
+	except Exception as e:
+		print(f"[CONFIG:AUTH] Using defaults. Reason: {e}")
+		return defaults["output_dir"]
+
+
+AUTH_REQUEST_OUTPUT_DIR = load_auth_request_config()
+
+
+def load_operator_config():
+	"""Load operator prompt/log config from config.json next to script/.exe."""
+	defaults = {
+		"items_on_start": True,
+		"operator_log_output_dir": "operatorlog",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if not isinstance(data, dict):
+			return defaults["items_on_start"], defaults["operator_log_output_dir"]
+		items_on_start = bool(data.get("items_on_start", defaults["items_on_start"]))
+		output_dir = str(data.get("operator_log_output_dir", defaults["operator_log_output_dir"]))
+		return items_on_start, output_dir
+	except Exception as e:
+		print(f"[CONFIG:OPERATOR] Using defaults. Reason: {e}")
+		return defaults["items_on_start"], defaults["operator_log_output_dir"]
+
+
+ITEMS_ON_START, OPERATOR_LOG_OUTPUT_DIR = load_operator_config()
+
+
+def load_crunch_coms_config():
+	"""Load integrated crunch listener config from config.json next to script/.exe."""
+	defaults = {
+		"enabled": True,
+		"ip": "192.168.10.34",
+		"port": 2000,
+		"size": 2048,
+		"real_count": 360,
+		"real_stride": 4,
+		"real_start": 0,
+		"output_dir": "data/crunch",
+	}
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+		if isinstance(data, dict) and isinstance(data.get("crunch_coms"), dict):
+			data = data["crunch_coms"]
+		else:
+			data = {}
+
+		return (
+			bool(data.get("enabled", defaults["enabled"])),
+			str(data.get("ip", defaults["ip"])),
+			int(data.get("port", defaults["port"])),
+			int(data.get("size", defaults["size"])),
+			int(data.get("real_count", defaults["real_count"])),
+			int(data.get("real_stride", defaults["real_stride"])),
+			int(data.get("real_start", defaults["real_start"])),
+			str(data.get("output_dir", defaults["output_dir"])),
+		)
+	except Exception as e:
+		print(f"[CONFIG:CRUNCH] Using defaults. Reason: {e}")
+		return (
+			defaults["enabled"],
+			defaults["ip"],
+			defaults["port"],
+			defaults["size"],
+			defaults["real_count"],
+			defaults["real_stride"],
+			defaults["real_start"],
+			defaults["output_dir"],
+		)
+
+
+def load_item_ids_config():
+	"""Load dynamic item id prompts from config.json next to script/.exe."""
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+	except Exception as e:
+		print(f"[CONFIG:ITEM IDS] Using defaults. Reason: {e}")
+		return []
+
+	if not isinstance(data, dict):
+		return []
+
+	items = data.get("item_ids")
+	if not isinstance(items, list):
+		return []
+
+	valid_items = []
+	for raw_item in items:
+		if not isinstance(raw_item, dict):
+			continue
+		label = str(raw_item.get("label", "")).strip()
+		key = str(raw_item.get("key", "")).strip()
+		command_char = str(raw_item.get("command_char", "")).strip().lower()
+		if not label or not key:
+			continue
+		valid_items.append({"label": label, "key": key, "command_char": command_char})
+
+	return valid_items
+
+
+def get_item_configs_for_command(command_char):
+	command_char = str(command_char or "").strip().lower()
+	if not command_char:
+		return []
+	return [item_cfg for item_cfg in ITEM_ID_CONFIGS if item_cfg.get("command_char") == command_char]
+
+
+(
+	CRUNCH_COMS_ENABLED,
+	CRUNCH_COMS_IP,
+	CRUNCH_COMS_PORT,
+	CRUNCH_COMS_SIZE,
+	CRUNCH_REAL_COUNT,
+	CRUNCH_REAL_STRIDE,
+	CRUNCH_REAL_START,
+	CRUNCH_OUTPUT_DIR,
+) = load_crunch_coms_config()
+ITEM_ID_CONFIGS = load_item_ids_config()
+
 # Shared state for detection results + remote control
 state_lock = threading.Lock()
 latest_state = {
@@ -194,10 +352,14 @@ latest_state = {
 	"pending_relative_reference": False,
 	"last_response": b"0,0\n", # Latest response generated by recv server
 	"operator_id": None,
-	"item_id": None,
+	"item_ids": {},
 	"pending_reset_operator": False,
 	"pending_reset_item": False,
+	"pending_reset_item_command_char": None,
+	"reset_operator_in_progress": False,
+	"reset_operator_result": None,
 }
+reset_operator_done_event = threading.Event()
 
 
 def _sanitize_filename_token(value):
@@ -219,8 +381,7 @@ def save_delta_payload(x, y, operator_id, item_id, now):
 	item_token = _sanitize_filename_token(item_id)
 	filename = f"{timestamp}_{operator_token}_{item_token}.txt"
 
-	base_path = get_base_path()
-	data_dir = os.path.join(base_path, "data")
+	data_dir = os.path.join(os.path.dirname(__file__), "data")
 	os.makedirs(data_dir, exist_ok=True)
 	file_path = os.path.join(data_dir, filename)
 
@@ -228,6 +389,82 @@ def save_delta_payload(x, y, operator_id, item_id, now):
 		f.write(payload)
 
 	return payload, file_path
+
+
+def read_real_at(data: bytes, offset: int) -> float | None:
+	end = offset + 4
+	if end > len(data):
+		return None
+	return struct.unpack(">f", data[offset:end])[0]
+
+
+def read_real_array(data: bytes, start_offset: int, count: int, stride: int = 4):
+	values = []
+	for index in range(count):
+		offset = start_offset + index * stride
+		values.append(read_real_at(data, offset))
+	return values
+
+
+def _format_item_ids_for_single_field(item_ids):
+	if not item_ids:
+		return ""
+	parts = []
+	for item_cfg in ITEM_ID_CONFIGS:
+		key = item_cfg["key"]
+		value = str(item_ids.get(key, "")).strip()
+		if value:
+			parts.append(f"{key}={value}")
+	return "|".join(parts)
+
+
+def format_crunch_payload(operator_id, item_ids, now, values):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	parts = [f"id_operador: {operator_id or ''}"]
+	for item_cfg in ITEM_ID_CONFIGS:
+		key = item_cfg["key"]
+		value = "" if not isinstance(item_ids, dict) else str(item_ids.get(key, "") or "")
+		parts.append(f"{key}: {value}")
+	data_lines = "\n".join("" if value is None else str(value) for value in values)
+	parts.append(f"timestamp: {timestamp}")
+	header_text = ", ".join(parts)
+	return f"{header_text}\ndatos:\n{data_lines}\n", timestamp
+
+
+def save_crunch_payload(operator_id, item_ids, now, values):
+	payload_text, timestamp = format_crunch_payload(operator_id, item_ids, now, values)
+	output_dir = os.path.join(get_base_path(), CRUNCH_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+
+	operator_token = _sanitize_filename_token(operator_id)
+	item_token = _sanitize_filename_token(_format_item_ids_for_single_field(item_ids))
+	file_path = os.path.join(output_dir, f"{timestamp}_{operator_token}_{item_token}.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(payload_text)
+
+	return payload_text.encode("utf-8"), file_path
+
+
+def save_auth_request_result(result_text, now):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	content_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+	output_dir = os.path.join(get_base_path(), AUTH_REQUEST_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+	file_path = os.path.join(output_dir, f"{timestamp}.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(f"{result_text} {content_timestamp}")
+	return file_path
+
+
+def save_operator_request_result(operator_id, now):
+	timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+	content_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+	output_dir = os.path.join(get_base_path(), OPERATOR_LOG_OUTPUT_DIR)
+	os.makedirs(output_dir, exist_ok=True)
+	file_path = os.path.join(output_dir, f"{timestamp} - OPERATOR.txt")
+	with open(file_path, "w", encoding="utf-8") as f:
+		f.write(f"{operator_id} {content_timestamp}")
+	return file_path
 
 
 def compute_scaled_delta(reference_point, current_point):
@@ -239,7 +476,8 @@ def compute_scaled_delta(reference_point, current_point):
 def format_tcp_response(x_value, y_value):
 	response_x = round(x_value * TCP_X_FACTOR, 2)
 	response_y = round(y_value * TCP_Y_FACTOR, 2)
-	response_text = f"{response_x},{response_y}"
+	# response_text = f"{response_x},{response_y}" // Por el momento, solo se enviara Y
+	response_text = f"0.0,{response_y}"
 	return response_text.encode("utf-8") + b"\n", response_text
 
 
@@ -315,6 +553,27 @@ def normalize_area(area_coords, default_area):
 	return ((x1n, y1n), (x2n, y2n))
 
 
+def load_glue_config(default_roi):
+	base_path = get_base_path()
+	cfg_path = os.path.join(base_path, "config.json")
+	glue_roi = default_roi
+
+	try:
+		with open(cfg_path, "r", encoding="utf-8") as f:
+			data = json.load(f)
+
+		if not isinstance(data, dict):
+			return glue_roi
+
+		glue_cfg = data.get("glue") if isinstance(data.get("glue"), dict) else {}
+		raw_glue_roi = glue_cfg.get("roi", data.get("roi"))
+		glue_roi = normalize_area(raw_glue_roi, default_roi)
+	except Exception as e:
+		print(f"[CONFIG:GLUE] Using defaults. Reason: {e}")
+
+	return glue_roi
+
+
 def run_glue_pipeline(frame, roi_coords, filter_pair):
 	glue_frame = frame.copy()
 	cv2.rectangle(glue_frame, roi_coords[0], roi_coords[1], (255, 0, 255), 2)
@@ -349,6 +608,8 @@ def run_glue_pipeline(frame, roi_coords, filter_pair):
 	edge_contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 	for contour in edge_contours:
 		contour_x, contour_y, contour_w, contour_h = cv2.boundingRect(contour)
+		if contour_y is None or contour_h is None:
+			continue
 		if 0 < contour_w < 30:
 			contour_in_frame = contour + np.array([[[x1_roi, y1_roi]]])
 			cv2.drawContours(glue_frame, [contour_in_frame], -1, (0, 255, 0), 2)
@@ -356,68 +617,165 @@ def run_glue_pipeline(frame, roi_coords, filter_pair):
 	return glue_frame
 
 
-def _prompt_text_with_tk(title, prompt):
-	"""Ask for a non-empty value in a Tkinter window and submit on Enter."""
+def _prompt_text_with_tk(title, prompt, require_non_empty=True):
+	"""Prompt for text using Tkinter, optionally allowing empty/cancelled results."""
 	while True:
 		try:
 			root = tk.Tk()
 			root.title(title)
 			root.resizable(False, False)
 			root.attributes("-topmost", True)
+			root.geometry("960x540")
+			root.minsize(960, 540)
 		except tk.TclError:
 			value = input(f"{prompt} ").strip()
-			if value:
-				return value
-			continue
+			if require_non_empty and not value:
+				continue
+			return value
 
 		value_ref = {"value": None}
 
-		frame = tk.Frame(root, padx=16, pady=12)
-		frame.pack()
+		frame = tk.Frame(root, padx=48, pady=36)
+		frame.pack(fill="both", expand=True)
 
-		label = tk.Label(frame, text=prompt)
-		label.pack(anchor="w")
+		label = tk.Label(frame, text=prompt, font=("TkDefaultFont", 30))
+		label.pack(anchor="w", pady=(0, 18))
 
-		entry = tk.Entry(frame, width=32)
-		entry.pack(fill="x", pady=(6, 4))
-		entry.focus_set()
+		entry = tk.Entry(frame, width=60, font=("TkDefaultFont", 30))
+		entry.pack(fill="x", ipady=16, pady=(0, 12))
 
-		error_label = tk.Label(frame, text="", fg="red")
+		def force_focus():
+			root.lift()
+			root.attributes("-topmost", True)
+			root.focus_force()
+			entry.focus_force()
+			root.after(300, lambda: root.attributes("-topmost", False))
+
+		error_label = tk.Label(frame, text="", fg="red", font=("TkDefaultFont", 22))
 		error_label.pack(anchor="w")
 
 		def submit(event=None):
 			value = entry.get().strip()
-			if not value:
+			if require_non_empty and not value:
 				error_label.config(text="El valor no puede estar vacio.")
 				return
 			value_ref["value"] = value
 			root.destroy()
 
-		submit_btn = tk.Button(frame, text="Submit", command=submit)
-		submit_btn.pack(pady=(8, 0))
+		def on_close():
+			value_ref["value"] = ""
+			root.destroy()
+
+		submit_btn = tk.Button(
+			frame,
+			text="Submit",
+			command=submit,
+			font=("TkDefaultFont", 26),
+			padx=36,
+			pady=18,
+		)
+		submit_btn.pack(pady=(24, 0), anchor="center")
 
 		root.bind("<Return>", submit)
-		root.protocol("WM_DELETE_WINDOW", lambda: None)
+		root.protocol("WM_DELETE_WINDOW", lambda: None if require_non_empty else on_close())
+		root.after(100, force_focus)
 		root.mainloop()
 
-		if value_ref["value"]:
+		if value_ref["value"] is not None:
 			return value_ref["value"]
 
 
-def request_operator_and_item():
-	operator_id = _prompt_text_with_tk("ID Operador", "Ingresa ID de operador:")
-	item_id = _prompt_text_with_tk("ID Item", "Ingresa ID de item:")
+def request_engineer_authorization():
+	return _prompt_text_with_tk("Autorizacion", "Escanee el id de ingeniero", require_non_empty=False)
+
+
+def get_key_command(key):
+	key_map = {
+		p_unicode: "pink",
+		g_unicode: "gold",
+		w_unicode: "white",
+		c_unicode: "center",
+		d_unicode: "dispenser_center",
+		r_unicode: "relative_reference",
+		z_unicode: "delta",
+		x_unicode: "relative_delta",
+		o_unicode: "reset_operator",
+		i_unicode: "request_engineer_auth",
+		s_unicode: "reset_item",
+	}
+	return key_map.get(key)
+
+
+def get_command_response_char(cmd):
+	response_chars = {
+		"pink": "p",
+		"gold": "g",
+		"white": "w",
+		"center": "c",
+		"dispenser_center": "d",
+		"relative_reference": "r",
+		"reset_operator": "o",
+		"request_engineer_auth": "i",
+		"reset_item": "s",
+	}
+	if cmd.startswith(ITEM_RESET_CMD_PREFIX):
+		return cmd[len(ITEM_RESET_CMD_PREFIX):]
+	return response_chars.get(cmd)
+
+
+def format_command_response(response_char, success=True):
+	if not response_char:
+		response_char = ""
+	response_text = str(response_char).strip().lower()
+	if not success:
+		response_text = response_text.upper()
+	return response_text.encode("utf-8"), response_text
+
+
+def request_required_text(title, prompt):
+	while True:
+		value = _prompt_text_with_tk(title, prompt, require_non_empty=False)
+		if value:
+			return value
+
+
+def request_item_ids(item_configs):
+	item_values = {}
+	for item_cfg in item_configs:
+		label = item_cfg["label"]
+		key = item_cfg["key"]
+		item_values[key] = request_required_text("ID Item", f"Escanee el codigo: {label}")
+	return item_values
+
+
+def request_all_item_ids():
+	return request_item_ids(ITEM_ID_CONFIGS)
+
+
+def request_operator_only():
+	operator_id = request_required_text("ID Operador", "Escanee el id de operador")
+	operator_saved_path = save_operator_request_result(operator_id, datetime.now())
 	with state_lock:
 		latest_state["operator_id"] = operator_id
-		latest_state["item_id"] = item_id
-	print(f"[IDS] operador={operator_id} item={item_id}")
+	print(f"[IDS] operador={operator_id}")
+	print(f"[OPERATOR DATA] saved {operator_saved_path}")
+	return operator_id, operator_saved_path
 
 
-def request_item_only():
-	item_id = _prompt_text_with_tk("ID Item", "Ingresa ID de item:")
+def request_operator_and_item():
+	operator_id, operator_saved_path = request_operator_only()
+	item_ids = request_all_item_ids()
 	with state_lock:
-		latest_state["item_id"] = item_id
-	print(f"[IDS] item={item_id}")
+		latest_state["item_ids"] = item_ids
+	print(f"[IDS] operador={operator_id} items={item_ids}")
+	return operator_id, item_ids, operator_saved_path
+
+
+def request_item_only(item_configs=None):
+	item_ids = request_item_ids(item_configs or ITEM_ID_CONFIGS)
+	with state_lock:
+		latest_state["item_ids"].update(item_ids)
+	print(f"[IDS] items={item_ids}")
 
 
 def process_pending_id_requests():
@@ -427,27 +785,150 @@ def process_pending_id_requests():
 	with state_lock:
 		do_reset_operator = latest_state["pending_reset_operator"]
 		do_reset_item = latest_state["pending_reset_item"]
+		reset_item_command_char = latest_state["pending_reset_item_command_char"]
 
 		if do_reset_operator:
 			latest_state["pending_reset_operator"] = False
 			latest_state["pending_reset_item"] = False
+			latest_state["pending_reset_item_command_char"] = None
 		elif do_reset_item:
 			latest_state["pending_reset_item"] = False
+			latest_state["pending_reset_item_command_char"] = None
 
 	if do_reset_operator:
-		request_operator_and_item()
+		reset_success = False
+		try:
+			request_operator_only()
+			reset_success = True
+		except Exception as e:
+			print(f"[RESET OPERATOR ERROR] {e}")
+		finally:
+			with state_lock:
+				latest_state["reset_operator_in_progress"] = False
+				latest_state["reset_operator_result"] = reset_success
+			reset_operator_done_event.set()
 	elif do_reset_item:
-		request_item_only()
+		item_configs = None
+		if reset_item_command_char:
+			item_configs = get_item_configs_for_command(reset_item_command_char)
+			if not item_configs:
+				print(f"[RESET ITEM WARN] No item_ids configured for command_char={reset_item_command_char!r}")
+				return
+		request_item_only(item_configs)
 
 
-request_operator_and_item()
+def handle_command(cmd, source="tcp", response_char=None):
+	delta_saved_path = None
+	auth_saved_path = None
+	log_text = None
+	if response_char is None:
+		response_char = get_command_response_char(cmd)
+
+	if cmd == "request_engineer_auth":
+		auth_result = request_engineer_authorization()
+		auth_saved_path = save_auth_request_result(auth_result, datetime.now())
+		response, log_text = format_command_response(response_char, success=bool(auth_result))
+		with state_lock:
+			latest_state["last_response"] = response
+		return response, log_text, delta_saved_path, auth_saved_path
+
+	with state_lock:
+		if cmd in ("pink", "gold", "white"):
+			latest_state["pending_filter"] = cmd
+			response, log_text = format_command_response(response_char)
+
+		elif cmd == "center":
+			latest_state["pending_center"] = True
+			response, log_text = format_command_response(response_char)
+
+		elif cmd == "dispenser_center":
+			latest_state["pending_dispenser_center"] = True
+			response, log_text = format_command_response(response_char)
+
+		elif cmd == "relative_reference":
+			latest_state["pending_relative_reference"] = True
+			response, log_text = format_command_response(response_char)
+
+		elif cmd == "reset_operator":
+			if latest_state["pending_reset_operator"] or latest_state["reset_operator_in_progress"]:
+				should_wait_reset = source == "tcp"
+				response, log_text = format_command_response(response_char)
+				log_text = f"{log_text} (reset_operator already pending)"
+			else:
+				latest_state["operator_id"] = None
+				latest_state["pending_reset_operator"] = True
+				latest_state["reset_operator_in_progress"] = True
+				latest_state["reset_operator_result"] = None
+				reset_operator_done_event.clear()
+				should_wait_reset = source == "tcp"
+				response, log_text = format_command_response(response_char)
+
+		elif cmd == "reset_item":
+			latest_state["item_ids"] = {}
+			latest_state["pending_reset_item"] = True
+			latest_state["pending_reset_item_command_char"] = None
+			response, log_text = format_command_response(response_char)
+
+		elif cmd.startswith(ITEM_RESET_CMD_PREFIX):
+			command_char = cmd[len(ITEM_RESET_CMD_PREFIX):]
+			item_configs = get_item_configs_for_command(command_char)
+			if item_configs:
+				for item_cfg in item_configs:
+					latest_state["item_ids"].pop(item_cfg["key"], None)
+				latest_state["pending_reset_item"] = True
+				latest_state["pending_reset_item_command_char"] = command_char
+				response, log_text = format_command_response(response_char)
+			else:
+				response, log_text = format_command_response(response_char, success=False)
+
+		elif cmd == "delta":
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			operator_id = latest_state["operator_id"] or ""
+			item_id = _format_item_ids_for_single_field(latest_state["item_ids"])
+			now = datetime.now()
+			_, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
+			response, log_text = format_tcp_response(x, y)
+
+		elif cmd == "relative_delta":
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			operator_id = latest_state["operator_id"] or ""
+			item_id = _format_item_ids_for_single_field(latest_state["item_ids"])
+			now = datetime.now()
+			_, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
+			response, log_text = format_tcp_response(x, y)
+
+		else:
+			x = latest_state["relative_x_diff"]
+			y = latest_state["relative_y_diff"]
+			response, log_text = format_tcp_response(x, y)
+
+		latest_state["last_response"] = response
+	if cmd == "reset_operator" and source == "tcp":
+		reset_operator_done_event.wait()
+		with state_lock:
+			reset_success = bool(latest_state["reset_operator_result"])
+		response, log_text = format_command_response(response_char, success=reset_success)
+		with state_lock:
+			latest_state["last_response"] = response
+
+	return response, log_text, delta_saved_path, auth_saved_path
+
+
+request_operator_only()
+if ITEMS_ON_START:
+	request_item_only()
+
 
 def mouse_cb(event, x, y, flags, param):
 	if event == cv2.EVENT_LBUTTONDOWN:
 		print(f"({x}, {y})")
 
+
 cv2.namedWindow("Frame")
 cv2.setMouseCallback("Frame", mouse_cb)
+
 
 def recv_server_thread():
 	server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -488,72 +969,25 @@ def recv_server_thread():
 
 				data = chunk
 				debug_recv_data(data)
-				cmd = extract_cmd(data)
+				cmd, response_char = extract_cmd(data)
 
 				print("comando:")
 				print(cmd)
-
-				with state_lock:
-					if cmd in ("pink", "gold", "white"):
-						latest_state["pending_filter"] = cmd
-						response = b"OK\n"
-
-					elif cmd == "center":
-						latest_state["pending_center"] = True
-						response = b"OK\n"
-
-					elif cmd == "dispenser_center":
-						latest_state["pending_dispenser_center"] = True
-						response = b"OK\n"
-
-					elif cmd == "relative_reference":
-						latest_state["pending_relative_reference"] = True
-						response = b"OK\n"
-
-					elif cmd == "reset_operator":
-						latest_state["operator_id"] = None
-						latest_state["item_id"] = None
-						latest_state["pending_reset_operator"] = True
-						latest_state["pending_reset_item"] = False
-						response = b"OK\n"
-
-					elif cmd == "reset_item":
-						latest_state["item_id"] = None
-						latest_state["pending_reset_item"] = True
-						response = b"OK\n"
-
-					elif cmd == "delta":
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						operator_id = latest_state["operator_id"] or ""
-						item_id = latest_state["item_id"] or ""
-						now = datetime.now()
-						payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-						response, response_text = format_tcp_response(x, y)
-						print(f"[TCP Z RESPONSE] {response_text}")
-						# response = payload
-
-					elif cmd == "relative_delta":
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						operator_id = latest_state["operator_id"] or ""
-						item_id = latest_state["item_id"] or ""
-						now = datetime.now()
-						payload, delta_saved_path = save_delta_payload(x, y, operator_id, item_id, now)
-						response, _ = format_tcp_response(x, y)
-
-					else:
-						x = latest_state["relative_x_diff"]
-						y = latest_state["relative_y_diff"]
-						response, _ = format_tcp_response(x, y)
-
-					latest_state["last_response"] = response
+				response, log_text, delta_saved_path, auth_saved_path = handle_command(
+					cmd,
+					source="tcp",
+					response_char=response_char,
+				)
 
 				try:
 					conn.sendall(response)
 					print(f"[SENT] to {addr}: {response.decode('utf-8', errors='ignore').strip()}")
 					if delta_saved_path:
 						print(f"[DATA] saved {delta_saved_path}")
+					if auth_saved_path:
+						print(f"[AUTH DATA] saved {auth_saved_path}")
+					if cmd == "delta" and log_text:
+						print(f"[TCP Z RESPONSE] {log_text}")
 				except Exception as e:
 					print(f"[SEND ERROR] {e}")
 					break
@@ -592,7 +1026,7 @@ def send_server_thread():
 			with state_lock:
 				response = latest_state["last_response"]
 				operator_id = latest_state["operator_id"]
-				item_id = latest_state["item_id"]
+				item_ids = dict(latest_state["item_ids"])
 
 			if not isinstance(response, (bytes, bytearray)):
 				response = f"{response}\n".encode("utf-8")
@@ -601,21 +1035,79 @@ def send_server_thread():
 				conn.sendall(response)
 				print(
 					f"[SEND SERVER] to {addr}: {response.decode('utf-8', errors='ignore').strip()} "
-					f"(operador={operator_id}, item={item_id})"
+					f"(operador={operator_id}, items={item_ids})"
 				)
 			except Exception as e:
 				print(f"[SEND SERVER ERROR] {e}")
 
 
+def crunch_recv_server_thread():
+	if not CRUNCH_COMS_ENABLED:
+		print("[CRUNCH COMMS] Disabled in config.")
+		return
+
+	server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	try:
+		server.bind((CRUNCH_COMS_IP, CRUNCH_COMS_PORT))
+	except OSError as e:
+		print(f"[CRUNCH BIND ERROR] {e}")
+		return
+
+	server.listen()
+	print(f"[LISTENING] Crunch recv server listening on {CRUNCH_COMS_IP}:{CRUNCH_COMS_PORT}")
+
+	while True:
+		try:
+			conn, addr = server.accept()
+		except OSError as e:
+			print(f"[CRUNCH ACCEPT ERROR] {e}")
+			sleep(0.1)
+			continue
+
+		print(f"[CRUNCH CONNECTED] {addr}")
+		with conn:
+			try:
+				data = conn.recv(CRUNCH_COMS_SIZE)
+			except Exception as e:
+				print(f"[CRUNCH RX ERROR] {e}")
+				continue
+
+			if not data:
+				print("[CRUNCH DISCONNECTED] peer closed connection")
+				continue
+
+			print(f"[CRUNCH RECEIVED BYTES] {len(data)}")
+			expected_size = CRUNCH_REAL_START + (CRUNCH_REAL_COUNT * CRUNCH_REAL_STRIDE)
+			if len(data) < expected_size:
+				print(f"[CRUNCH WARN] Expected {expected_size} bytes, got {len(data)}")
+
+			values = read_real_array(
+				data,
+				CRUNCH_REAL_START,
+				CRUNCH_REAL_COUNT,
+				CRUNCH_REAL_STRIDE,
+			)
+
+			with state_lock:
+				operator_id = latest_state["operator_id"] or ""
+				item_ids = dict(latest_state["item_ids"])
+
+			now = datetime.now()
+			_, saved_path = save_crunch_payload(operator_id, item_ids, now, values)
+			print(f"[CRUNCH DATA] saved {saved_path}")
+
+
 threading.Thread(target=recv_server_thread, daemon=True).start()
 threading.Thread(target=send_server_thread, daemon=True).start()
+threading.Thread(target=crunch_recv_server_thread, daemon=True).start()
+
 
 def load_camera_area_config():
 	"""Load camera index and detection area from config.json + extra options."""
 	defaults_index = 0
 	defaults_area = ((250, 190), (390, 290))
 	defaults_dispenser_area = ((190, 290), (290, 490))
-	defaults_glue_roi = ((250, 190), (390, 290))
 	defaults_edge = "left"
 
 	base_path = get_base_path()
@@ -623,7 +1115,6 @@ def load_camera_area_config():
 	cam_idx = defaults_index
 	area = defaults_area
 	area_dispenser = defaults_dispenser_area
-	glue_roi = defaults_glue_roi
 	is_rotate = False
 	is_rotate90 = False
 	edge = defaults_edge
@@ -648,38 +1139,31 @@ def load_camera_area_config():
 			raw_area = data.get("area")
 			if raw_area is None and isinstance(data.get("detection"), dict):
 				raw_area = data["detection"].get("area")
-			raw_area_dispenser = data.get("area_dispenser")
-			raw_glue_roi = data.get("roi")
 
+			raw_area_dispenser = data.get("area_dispenser")
 			area = normalize_area(raw_area, defaults_area)
 			area_dispenser = normalize_area(raw_area_dispenser, defaults_dispenser_area)
-			glue_roi = normalize_area(raw_glue_roi, defaults_glue_roi)
 
 	except Exception as e:
 		print(f"[CONFIG:CAM/AREA] Using defaults. Reason: {e}")
 
-	return cam_idx, area, area_dispenser, glue_roi, is_rotate, is_rotate90, edge
+	return cam_idx, area, area_dispenser, is_rotate, is_rotate90, edge
 
 
-camera_index, area, area_dispenser, glue_roi, is_rotate, is_rotate90, edge = load_camera_area_config()
+camera_index, area, area_dispenser, is_rotate, is_rotate90, edge = load_camera_area_config()
+glue_roi = load_glue_config(area)
 (x1, y1), (x2, y2) = area
 (dx1, dy1), (dx2, dy2) = area_dispenser
 
-print(f"[CONFIG] area={area}")
-print(f"[CONFIG] area_dispenser={area_dispenser}")
-print(f"[CONFIG] roi={glue_roi}")
-print(f"[CONFIG] rotate={is_rotate} rotate90={is_rotate90}")
-
 cam = cv2.VideoCapture(camera_index, cv2.CAP_DSHOW)
 is_frame_ok = False
+last_handled_key = None
 
 while not cam.isOpened() and not is_frame_ok:
 	cam = cv2.VideoCapture(camera_index)
 	is_frame_ok, _ = cam.read()
 	print("Waiting for camera...")
 	sleep(0.05)
-
-logged_frame_shape = False
 
 while True:
 	process_pending_id_requests()
@@ -693,10 +1177,6 @@ while True:
 
 	if is_rotate90:
 		frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-
-	if not logged_frame_shape:
-		print(f"[FRAME] shape_after_rotation={frame.shape}")
-		logged_frame_shape = True
 
 	glue_frame = run_glue_pipeline(frame, glue_roi, filter_pink)
 	main_detection = detect_contour_center(frame, area, filter_selected, edge)
@@ -819,6 +1299,14 @@ while True:
 	cv2.imshow("Filtered Dispenser", dispenser_msk)
 
 	key = cv2.waitKey(1)
+	if key == -1 or key == 255:
+		last_handled_key = None
+		continue
+
+	if key == last_handled_key:
+		continue
+
+	last_handled_key = key
 
 	if key == q_unicode:
 		break
@@ -826,23 +1314,11 @@ while True:
 	if key == b_unicode and pt_center is not None:
 		saved_reference_center = pt_center
 
-	if key == c_unicode and pt_center is not None and dispenser_center is not None:
-		saved_dispenser_reference_center = dispenser_center
-		if current_relative_diff is not None:
-			saved_relative_diff = current_relative_diff
-
 	if key == n_unicode and dispenser_center is not None:
 		saved_dispenser_reference_center = dispenser_center
 
 	if key == m_unicode and current_relative_diff is not None:
 		saved_relative_diff = current_relative_diff
-
-	if key == x_unicode:
-		with state_lock:
-			relative_x = latest_state["relative_x_diff"]
-			relative_y = latest_state["relative_y_diff"]
-		_, response_text = format_tcp_response(relative_x, relative_y)
-		print(f"[RELATIVE DELTA] {response_text}")
 
 	if key == one_unicode:
 		filter_selected = filter_pink
@@ -859,22 +1335,15 @@ while True:
 		saved_reference_center = None
 		saved_relative_diff = None
 
-	if key == p_unicode:
-		filter_selected = filter_pink
-		saved_reference_center = None
-		saved_relative_diff = None
-
-	if key == o_unicode:
-		with state_lock:
-			latest_state["operator_id"] = None
-			latest_state["item_id"] = None
-			latest_state["pending_reset_operator"] = True
-			latest_state["pending_reset_item"] = False
-
-	if key == i_unicode:
-		with state_lock:
-			latest_state["item_id"] = None
-			latest_state["pending_reset_item"] = True
+	key_cmd = get_key_command(key)
+	if key_cmd:
+		response, log_text, delta_saved_path, auth_saved_path = handle_command(key_cmd, source="keyboard")
+		if log_text:
+			print(f"[KEY CMD] {key_cmd}: {log_text}")
+		if delta_saved_path:
+			print(f"[KEY DATA] saved {delta_saved_path}")
+		if auth_saved_path:
+			print(f"[KEY AUTH DATA] saved {auth_saved_path}")
 
 cam.release()
 cv2.destroyAllWindows()

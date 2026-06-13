@@ -6,3 +6,10 @@ zips/
 
 helpers.py
 .codex
+
+# Extra files
+correction-cv/authlog/
+correction-cv/laser_data/
+correction-cv/operatorlog/
+correction-cv_w_glue/send_crunch_test.py
+correction-cv_w_glue/test_tcp.py

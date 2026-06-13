@@ -26,8 +26,41 @@
   "camera_index": 0,
   "rotate": false,
   "rotate90": true,
-  "roi": [[25, 290], [150, 450]],
-  "area": [[25, 290] ,[150, 450]],
-  "area_dispenser": [[100, 360] ,[300, 440]],
-  "edge": "left"
+  "area": [[25, 250], [150, 480]],
+  "area_dispenser": [[10, 320], [300, 440]],
+  "edge": "left",
+  "items_on_start": true,
+  "auth_request_output_dir": "authlog",
+  "operator_log_output_dir": "authlog",
+  "crunch_coms": {
+    "enabled": true,
+    "ip": "192.168.10.5",
+    "port": 2011,
+    "size": 2048,
+    "real_count": 100,
+    "real_stride": 4,
+    "real_start": 0,
+    "output_dir": "laser_data"
+  },
+  "item_ids_nota": "No se pueden usar como command_char: q, b, c, 1, 2, 3, o, p, i, n, m, x, z, g, w, d, r, s. Por que estan reservadas por el sistema",
+  "item_ids": [
+    {
+      "label": "Lote de Xtal",
+      "key": "lote_xtal",
+      "command_char": "t"
+    },
+    {
+      "label": "Flex PCB",
+      "key": "flex_pcb",
+      "command_char": "t"
+    },
+    {
+      "label": "Epoxy",
+      "key": "epoxy",
+      "command_char": "e"
+    }
+  ],
+  "glue": {
+    "roi": [[25, 290], [150, 450]]
+  }
 }
