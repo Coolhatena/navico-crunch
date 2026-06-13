@@ -417,7 +417,7 @@ def save_delta_payload(x, y, operator_id, item_id, now):
 	return payload, file_path
 
 
-def read_real_at(data: bytes, offset: int) -> float | None:
+def read_real_at(data: bytes, offset: int):
 	end = offset + 4
 	if end > len(data):
 		return None

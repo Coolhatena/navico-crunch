@@ -50,7 +50,7 @@ def load_crunch_config(config_path: Path) -> dict:
     return cfg
 
 
-def generate_values(args: argparse.Namespace, real_count: int) -> list[float]:
+def generate_values(args: argparse.Namespace, real_count: int):
     if args.pattern == "constant":
         return [float(args.value)] * real_count
 
@@ -59,7 +59,7 @@ def generate_values(args: argparse.Namespace, real_count: int) -> list[float]:
     return [start + (index * step) for index in range(real_count)]
 
 
-def build_payload(values: list[float], real_start: int, real_stride: int) -> bytes:
+def build_payload(values, real_start: int, real_stride: int) -> bytes:
     total_size = real_start + (len(values) * real_stride)
     payload = bytearray(total_size)
 
