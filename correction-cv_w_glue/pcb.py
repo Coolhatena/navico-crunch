@@ -94,13 +94,14 @@ def get_base_path():
 
 def load_filters_config():
 	"""Load HSV filters from config.json -> {filters:{name:{low:[H,S,V], high:[H,S,V]}}}.
-	Returns numpy array pairs for pink, gold, white, dispenser. Falls back to defaults.
+	Returns numpy array pairs for pink, gold, white, dispenser, glue. Falls back to defaults.
 	"""
 	defaults = {
 		"pink": {"low": [0, 0, 0], "high": [25, 255, 255]},
 		"gold": {"low": [18, 0, 173], "high": [49, 168, 248]},
 		"white": {"low": [0, 0, 162], "high": [180, 28, 255]},
 		"dispenser": {"low": [0, 0, 97], "high": [180, 22, 142]},
+		"glue": {"low": [0, 0, 0], "high": [25, 255, 255]},
 	}
 	base_path = get_base_path()
 	cfg_path = os.path.join(base_path, "config.json")
@@ -125,10 +126,11 @@ def load_filters_config():
 		to_pair(filters_cfg, "gold"),
 		to_pair(filters_cfg, "white"),
 		to_pair(filters_cfg, "dispenser"),
+		to_pair(filters_cfg, "glue"),
 	)
 
 
-filter_pink, filter_gold, filter_white, filter_dispenser = load_filters_config()
+filter_pink, filter_gold, filter_white, filter_dispenser, filter_glue = load_filters_config()
 filter_selected = filter_pink  # Default
 
 q_unicode = ord("q")
@@ -1218,7 +1220,7 @@ while True:
 	detection_frame = adjusted_frame if CONT_BRIG_ON_DETECCION else frame
 	glue_input_frame = adjusted_frame if CONT_BRIG_ON_GLUE else frame
 
-	glue_frame = run_glue_pipeline(glue_input_frame, glue_roi, filter_pink)
+	glue_frame = run_glue_pipeline(glue_input_frame, glue_roi, filter_glue)
 	main_detection = detect_contour_center(detection_frame, area, filter_selected, edge)
 	dispenser_detection = detect_contour_center(detection_frame, area_dispenser, filter_dispenser, edge)
 	msk = main_detection["mask"] if main_detection["mask"] is not None else np.zeros((1, 1), dtype=np.uint8)
