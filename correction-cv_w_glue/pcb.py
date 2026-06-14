@@ -640,17 +640,17 @@ def run_glue_pipeline(frame, roi_coords, filter_pair):
 	cropped_obj = cv2.bitwise_and(filtered, filtered, mask=contour_mask)
 
 	gray_obj = cv2.cvtColor(cropped_obj, cv2.COLOR_BGR2GRAY)
-	blurred_obj = cv2.GaussianBlur(gray_obj, (5, 5), 0)
-	edges = cv2.Canny(blurred_obj, 10, 20)
+	
+	cv2.imshow("glue_filtered", gray_obj)
 
-	edge_contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+	edge_contours, _ = cv2.findContours(gray_obj, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
 	for contour in edge_contours:
 		contour_x, contour_y, contour_w, contour_h = cv2.boundingRect(contour)
 		if contour_y is None or contour_h is None:
 			continue
-		if 0 < contour_w < 30:
-			contour_in_frame = contour + np.array([[[x1_roi, y1_roi]]])
-			cv2.drawContours(glue_frame, [contour_in_frame], -1, (0, 255, 0), 2)
+		
+		contour_in_frame = contour + np.array([[[x1_roi, y1_roi]]])
+		cv2.drawContours(glue_frame, [contour_in_frame], -1, (0, 255, 0), 2)
 
 	return glue_frame
 
